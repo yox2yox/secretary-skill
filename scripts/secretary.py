@@ -41,6 +41,36 @@ CREATE INDEX IF NOT EXISTS idx_entries_entry_date ON entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_entries_status ON entries(status);
 CREATE INDEX IF NOT EXISTS idx_entries_due_date ON entries(due_date);
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
+
+CREATE TABLE IF NOT EXISTS persons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_type TEXT NOT NULL DEFAULT 'contact',
+    name TEXT NOT NULL,
+    relationship TEXT DEFAULT '',
+    organization TEXT DEFAULT '',
+    role TEXT DEFAULT '',
+    birthday TEXT,
+    email TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_persons_person_type ON persons(person_type);
+CREATE INDEX IF NOT EXISTS idx_persons_name ON persons(name);
+
+CREATE TABLE IF NOT EXISTS person_attributes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_person_attributes_person_id ON person_attributes(person_id);
+CREATE INDEX IF NOT EXISTS idx_person_attributes_category ON person_attributes(category);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_person_attributes_unique ON person_attributes(person_id, category, key);
 """
 
 
@@ -324,10 +354,242 @@ def cmd_list():
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+## ── Person (profile) commands ──────────────────────────────────────────
+
+
+def cmd_person_add(data_json):
+    """Add a new person (owner or contact)."""
+    data = json.loads(data_json)
+    conn = get_connection()
+    ensure_schema(conn)
+
+    cursor = conn.execute(
+        """INSERT INTO persons (person_type, name, relationship, organization, role, birthday, email, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            data.get("person_type", "contact"),
+            data["name"],
+            data.get("relationship", ""),
+            data.get("organization", ""),
+            data.get("role", ""),
+            data.get("birthday"),
+            data.get("email", ""),
+            data.get("notes", ""),
+        ),
+    )
+    person_id = cursor.lastrowid
+
+    # Optionally store attributes inline
+    attrs = data.get("attributes", [])
+    for attr in attrs:
+        conn.execute(
+            """INSERT OR REPLACE INTO person_attributes (person_id, category, key, value)
+               VALUES (?, ?, ?, ?)""",
+            (person_id, attr["category"], attr["key"], attr["value"]),
+        )
+
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "id": person_id}))
+
+
+def cmd_person_update(person_id, update_json):
+    """Update an existing person's basic info."""
+    updates = json.loads(update_json)
+    conn = get_connection()
+    ensure_schema(conn)
+
+    allowed = ["person_type", "name", "relationship", "organization", "role", "birthday", "email", "notes"]
+    set_clauses = []
+    params = []
+    for field in allowed:
+        if field in updates:
+            set_clauses.append(f"{field} = ?")
+            params.append(updates[field])
+
+    if not set_clauses:
+        print(json.dumps({"status": "error", "message": "No valid fields to update"}))
+        return
+
+    set_clauses.append("updated_at = datetime('now', 'localtime')")
+    params.append(int(person_id))
+
+    conn.execute(f"UPDATE persons SET {', '.join(set_clauses)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "id": int(person_id)}))
+
+
+def cmd_person_delete(person_id):
+    """Delete a person and their attributes."""
+    conn = get_connection()
+    ensure_schema(conn)
+    conn.execute("DELETE FROM person_attributes WHERE person_id = ?", (int(person_id),))
+    conn.execute("DELETE FROM persons WHERE id = ?", (int(person_id),))
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "id": int(person_id)}))
+
+
+def cmd_person_get(person_id):
+    """Get a person with all their attributes."""
+    conn = get_connection()
+    ensure_schema(conn)
+
+    row = conn.execute("SELECT * FROM persons WHERE id = ?", (int(person_id),)).fetchone()
+    if not row:
+        conn.close()
+        print(json.dumps({"status": "error", "message": "Person not found"}))
+        return
+
+    person = dict(row)
+    attrs = conn.execute(
+        "SELECT * FROM person_attributes WHERE person_id = ? ORDER BY category, key",
+        (int(person_id),),
+    ).fetchall()
+    person["attributes"] = [dict(a) for a in attrs]
+
+    conn.close()
+    print(json.dumps(person, ensure_ascii=False, indent=2))
+
+
+def cmd_person_list(filter_json=None):
+    """List persons, optionally filtered by person_type."""
+    filters = json.loads(filter_json) if filter_json else {}
+    conn = get_connection()
+    ensure_schema(conn)
+
+    where_clauses = []
+    params = []
+    if "person_type" in filters:
+        where_clauses.append("person_type = ?")
+        params.append(filters["person_type"])
+    if "name" in filters:
+        where_clauses.append("name LIKE ?")
+        params.append(f"%{filters['name']}%")
+    if "relationship" in filters:
+        where_clauses.append("relationship LIKE ?")
+        params.append(f"%{filters['relationship']}%")
+    if "organization" in filters:
+        where_clauses.append("organization LIKE ?")
+        params.append(f"%{filters['organization']}%")
+
+    where = " AND ".join(where_clauses) if where_clauses else "1=1"
+    rows = conn.execute(
+        f"SELECT * FROM persons WHERE {where} ORDER BY person_type, name", params
+    ).fetchall()
+
+    result = []
+    for row in rows:
+        person = dict(row)
+        attrs = conn.execute(
+            "SELECT * FROM person_attributes WHERE person_id = ? ORDER BY category, key",
+            (person["id"],),
+        ).fetchall()
+        person["attributes"] = [dict(a) for a in attrs]
+        result.append(person)
+
+    conn.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def cmd_person_search(keyword):
+    """Search persons by keyword across name, relationship, organization, role, notes, and attributes."""
+    conn = get_connection()
+    ensure_schema(conn)
+
+    pattern = f"%{keyword}%"
+    rows = conn.execute(
+        """SELECT DISTINCT p.* FROM persons p
+           LEFT JOIN person_attributes pa ON p.id = pa.person_id
+           WHERE p.name LIKE ? OR p.relationship LIKE ? OR p.organization LIKE ?
+                 OR p.role LIKE ? OR p.notes LIKE ?
+                 OR pa.key LIKE ? OR pa.value LIKE ?
+           ORDER BY p.person_type, p.name""",
+        (pattern, pattern, pattern, pattern, pattern, pattern, pattern),
+    ).fetchall()
+
+    result = []
+    for row in rows:
+        person = dict(row)
+        attrs = conn.execute(
+            "SELECT * FROM person_attributes WHERE person_id = ? ORDER BY category, key",
+            (person["id"],),
+        ).fetchall()
+        person["attributes"] = [dict(a) for a in attrs]
+        result.append(person)
+
+    conn.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+## ── Person attribute commands ──────────────────────────────────────────
+
+
+def cmd_attr_set(person_id, data_json):
+    """Set (upsert) one or more attributes for a person."""
+    entries = json.loads(data_json)
+    conn = get_connection()
+    ensure_schema(conn)
+
+    # Accept a single object or an array
+    if isinstance(entries, dict):
+        entries = [entries]
+
+    ids = []
+    for attr in entries:
+        cursor = conn.execute(
+            """INSERT INTO person_attributes (person_id, category, key, value)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(person_id, category, key)
+               DO UPDATE SET value = excluded.value,
+                             updated_at = datetime('now', 'localtime')""",
+            (int(person_id), attr["category"], attr["key"], attr["value"]),
+        )
+        ids.append(cursor.lastrowid)
+
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "ids": ids, "count": len(ids)}))
+
+
+def cmd_attr_delete(attr_id):
+    """Delete a single attribute by its ID."""
+    conn = get_connection()
+    ensure_schema(conn)
+    conn.execute("DELETE FROM person_attributes WHERE id = ?", (int(attr_id),))
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "id": int(attr_id)}))
+
+
+def cmd_attr_list(person_id, category=None):
+    """List attributes for a person, optionally filtered by category."""
+    conn = get_connection()
+    ensure_schema(conn)
+
+    if category:
+        rows = conn.execute(
+            "SELECT * FROM person_attributes WHERE person_id = ? AND category = ? ORDER BY key",
+            (int(person_id), category),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM person_attributes WHERE person_id = ? ORDER BY category, key",
+            (int(person_id),),
+        ).fetchall()
+
+    result = [dict(r) for r in rows]
+    conn.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: secretary.py <command> [args...]")
-        print("Commands: init, store, store_batch, query, search, update, delete, summary, list")
+        print("Commands: init, store, store_batch, query, search, update, delete, summary, list,")
+        print("         person_add, person_update, person_delete, person_get, person_list,")
+        print("         person_search, attr_set, attr_delete, attr_list")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -351,6 +613,26 @@ def main():
             cmd_summary(sys.argv[2] if len(sys.argv) > 2 else '{"type": "today"}')
         elif command == "list":
             cmd_list()
+        # Person commands
+        elif command == "person_add":
+            cmd_person_add(sys.argv[2])
+        elif command == "person_update":
+            cmd_person_update(sys.argv[2], sys.argv[3])
+        elif command == "person_delete":
+            cmd_person_delete(sys.argv[2])
+        elif command == "person_get":
+            cmd_person_get(sys.argv[2])
+        elif command == "person_list":
+            cmd_person_list(sys.argv[2] if len(sys.argv) > 2 else None)
+        elif command == "person_search":
+            cmd_person_search(sys.argv[2])
+        # Attribute commands
+        elif command == "attr_set":
+            cmd_attr_set(sys.argv[2], sys.argv[3])
+        elif command == "attr_delete":
+            cmd_attr_delete(sys.argv[2])
+        elif command == "attr_list":
+            cmd_attr_list(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
         else:
             print(json.dumps({"status": "error", "message": f"Unknown command: {command}"}))
             sys.exit(1)

@@ -2,10 +2,12 @@
 name: secretary
 description: >
   Personal secretary that stores and retrieves your events, plans, goals, tasks,
-  decisions, and notes in a structured SQLite database. Use this skill when the user
-  reports daily activities, logs events, sets goals, plans future tasks, or asks
-  questions about their stored information. Also triggers when the user asks for
-  summaries, schedules, or status of their goals and plans.
+  decisions, and notes in a structured SQLite database. Also manages profiles of
+  the user (owner) and people around them — personality, preferences, thinking
+  patterns, relationships, and more. Use this skill when the user reports daily
+  activities, logs events, sets goals, plans future tasks, asks questions about
+  their stored information, or manages personal/contact profiles. Also triggers
+  when the user asks for summaries, schedules, or status of their goals and plans.
 allowed-tools: Bash
 ---
 
@@ -109,6 +111,108 @@ python3 SCRIPT update <id> '{"priority":"high","due_date":"2025-02-01"}'
 python3 SCRIPT delete <id>
 ```
 
+### 5. Managing person profiles (owner & contacts)
+
+The secretary maintains a profile database of the user (owner) and people around them.
+This allows context-aware responses — understanding personality, preferences, relationships,
+and communication styles.
+
+**person_type values:**
+- `owner` — The user themselves (typically only one)
+- `contact` — People around the user (colleagues, family, friends, etc.)
+
+**Add a person:**
+```bash
+python3 SCRIPT person_add '{
+  "person_type": "owner",
+  "name": "田中太郎",
+  "organization": "株式会社ABC",
+  "role": "エンジニアリングマネージャー",
+  "birthday": "1990-05-15",
+  "email": "tanaka@example.com",
+  "notes": "朝型。集中力が高い時間は午前中。",
+  "attributes": [
+    {"category": "personality", "key": "性格タイプ", "value": "INTJ - 内向的だが論理的でビジョンを持つ"},
+    {"category": "preference", "key": "好きなこと", "value": "技術書を読むこと、アーキテクチャ設計"},
+    {"category": "thinking_pattern", "key": "意思決定スタイル", "value": "データ重視。感覚より数値で判断する傾向"},
+    {"category": "value", "key": "仕事の価値観", "value": "効率性と品質のバランス。無駄を嫌う"}
+  ]
+}'
+```
+
+**Add a contact:**
+```bash
+python3 SCRIPT person_add '{
+  "person_type": "contact",
+  "name": "佐藤花子",
+  "relationship": "直属の上司",
+  "organization": "株式会社ABC",
+  "role": "VP of Engineering",
+  "notes": "決断が早い。結論から話すのを好む。",
+  "attributes": [
+    {"category": "personality", "key": "コミュニケーションスタイル", "value": "端的で結論ファースト。長い前置きを嫌う"},
+    {"category": "preference", "key": "報告の好み", "value": "週次で簡潔なサマリー。問題があれば即報告"},
+    {"category": "relationship_note", "key": "注意点", "value": "金曜午後は機嫌が良い。月曜朝は忙しい"}
+  ]
+}'
+```
+
+**Attribute categories (examples — any category is accepted):**
+
+| Category           | Description                                | Example keys                                    |
+|--------------------|--------------------------------------------|-------------------------------------------------|
+| `personality`      | 性格特性・タイプ                           | 性格タイプ, コミュニケーションスタイル, 感情傾向 |
+| `preference`       | 好き嫌い・好み                             | 好きなこと, 嫌いなこと, 好きな食べ物, 趣味      |
+| `thinking_pattern` | 思考の癖・意思決定パターン                 | 意思決定スタイル, 問題解決アプローチ, バイアス   |
+| `value`            | 価値観・信念                               | 仕事の価値観, 人生の優先順位, 大切にしていること |
+| `work_style`       | 仕事のスタイル・習慣                       | 集中時間帯, ミーティング好み, 作業環境の好み     |
+| `communication`    | コミュニケーションの特徴                   | 話し方の特徴, フィードバックの受け方             |
+| `relationship_note`| 対人関係メモ（contact用）                  | 注意点, 接し方のコツ, 共通の話題                 |
+| `goal`             | 個人的な目標・夢                           | キャリア目標, 今年の目標                         |
+| `health`           | 健康・体調に関すること                     | アレルギー, 持病, 運動習慣                       |
+
+**Set/update attributes for an existing person:**
+```bash
+python3 SCRIPT attr_set <person_id> '[
+  {"category": "preference", "key": "好きな飲み物", "value": "ブラックコーヒー"},
+  {"category": "thinking_pattern", "key": "ストレス時の傾向", "value": "一人で考え込みがち"}
+]'
+```
+
+**Get a person with all attributes:**
+```bash
+python3 SCRIPT person_get <person_id>
+```
+
+**List all persons (or filter):**
+```bash
+python3 SCRIPT person_list
+python3 SCRIPT person_list '{"person_type": "owner"}'
+python3 SCRIPT person_list '{"person_type": "contact", "organization": "株式会社ABC"}'
+```
+
+**Search persons by keyword:**
+```bash
+python3 SCRIPT person_search 'キーワード'
+```
+
+**Update a person's basic info:**
+```bash
+python3 SCRIPT person_update <person_id> '{"role": "Senior Manager", "notes": "最近昇進した"}'
+```
+
+**Delete an attribute / person:**
+```bash
+python3 SCRIPT attr_delete <attribute_id>
+python3 SCRIPT person_delete <person_id>
+```
+
+**List attributes for a person (optionally by category):**
+```bash
+python3 SCRIPT attr_list <person_id>
+python3 SCRIPT attr_list <person_id> personality
+```
+
 ## Response Guidelines
 
 1. **Always respond in the user's language.** If the user writes in Japanese, respond
@@ -133,7 +237,14 @@ python3 SCRIPT delete <id>
    - Active goals and their progress
    - Recent events
 
-5. **Proactive insights**: When relevant, mention:
+5. **Using profile context**: When interacting with the user, leverage stored profile
+   information to provide personalized responses:
+   - Consider the user's personality, thinking patterns, and communication preferences
+   - When suggesting how to approach a person (contact), reference stored relationship notes
+   - Tailor advice based on known values and work styles
+   - Before important meetings or interactions, proactively surface relevant contact profiles
+
+6. **Proactive insights**: When relevant, mention:
    - Overdue tasks or approaching deadlines
    - Conflicts between scheduled items
    - Goals that haven't had recent activity
