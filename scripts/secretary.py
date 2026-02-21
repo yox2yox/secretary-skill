@@ -22,25 +22,63 @@ from datetime import datetime, timedelta
 DB_DIR = os.path.expanduser("~/.secretary")
 DB_PATH = os.path.join(DB_DIR, "data.db")
 
+VALID_CATEGORIES = {"event", "plan", "goal", "task", "decision", "note"}
+VALID_STATUSES = {"active", "completed", "archived"}
+VALID_PRIORITIES = {"high", "medium", "low"}
+VALID_RECURRENCES = {"daily", "weekly", "biweekly", "monthly", "yearly", None}
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('event', 'plan', 'goal', 'task', 'decision', 'note')),
     title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    tags TEXT DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
     entry_date TEXT,
     due_date TEXT,
-    status TEXT DEFAULT 'active',
-    priority TEXT DEFAULT 'medium',
-    created_at TEXT DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'archived')),
+    priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high', 'medium', 'low')),
+    parent_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+    location TEXT DEFAULT '',
+    url TEXT DEFAULT '',
+    recurrence TEXT CHECK(recurrence IS NULL OR recurrence IN ('daily', 'weekly', 'biweekly', 'monthly', 'yearly')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'))
 );
+
+CREATE TABLE IF NOT EXISTS entry_tags (
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (entry_id, tag)
+);
+
 CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
 CREATE INDEX IF NOT EXISTS idx_entries_entry_date ON entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_entries_status ON entries(status);
 CREATE INDEX IF NOT EXISTS idx_entries_due_date ON entries(due_date);
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
+CREATE INDEX IF NOT EXISTS idx_entries_category_status ON entries(category, status);
+CREATE INDEX IF NOT EXISTS idx_entries_status_due_date ON entries(status, due_date);
+CREATE INDEX IF NOT EXISTS idx_entries_parent_id ON entries(parent_id);
+CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+"""
+
+FTS_SETUP_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+    title, content, content=entries, content_rowid=id
+);
+
+CREATE TRIGGER IF NOT EXISTS entries_ai AFTER INSERT ON entries BEGIN
+    INSERT INTO entries_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_ad AFTER DELETE ON entries BEGIN
+    INSERT INTO entries_fts(entries_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_au AFTER UPDATE OF title, content ON entries BEGIN
+    INSERT INTO entries_fts(entries_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
+    INSERT INTO entries_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+END;
 """
 
 
@@ -57,6 +95,10 @@ def get_connection():
 def ensure_schema(conn):
     """Ensure the database schema exists."""
     conn.executescript(SCHEMA_SQL)
+    try:
+        conn.executescript(FTS_SETUP_SQL)
+    except sqlite3.OperationalError:
+        pass  # FTS5 already exists or not available
 
 
 def cmd_init():
@@ -67,6 +109,33 @@ def cmd_init():
     print(json.dumps({"status": "ok", "message": "Database initialized", "path": DB_PATH}))
 
 
+def _save_tags(conn, entry_id, tags_str):
+    """Parse comma-separated tags string and save to entry_tags table."""
+    if not tags_str:
+        return
+    tags = [t.strip() for t in tags_str.split(",") if t.strip()]
+    for tag in tags:
+        conn.execute(
+            "INSERT OR IGNORE INTO entry_tags (entry_id, tag) VALUES (?, ?)",
+            (entry_id, tag),
+        )
+
+
+def _get_tags(conn, entry_id):
+    """Get tags for an entry as a comma-separated string."""
+    rows = conn.execute(
+        "SELECT tag FROM entry_tags WHERE entry_id = ? ORDER BY tag", (entry_id,)
+    ).fetchall()
+    return ",".join(row["tag"] for row in rows)
+
+
+def _entry_to_dict(conn, row):
+    """Convert an entry row to a dict, attaching tags from entry_tags table."""
+    d = dict(row)
+    d["tags"] = _get_tags(conn, d["id"])
+    return d
+
+
 def cmd_store(data_json):
     """Store a single entry."""
     data = json.loads(data_json)
@@ -74,21 +143,26 @@ def cmd_store(data_json):
     ensure_schema(conn)
 
     cursor = conn.execute(
-        """INSERT INTO entries (category, title, content, tags, entry_date, due_date, status, priority)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO entries (category, title, content, entry_date, due_date,
+                               status, priority, parent_id, location, url, recurrence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             data.get("category", "note"),
             data["title"],
             data.get("content", ""),
-            data.get("tags", ""),
             data.get("entry_date"),
             data.get("due_date"),
             data.get("status", "active"),
             data.get("priority", "medium"),
+            data.get("parent_id"),
+            data.get("location", ""),
+            data.get("url", ""),
+            data.get("recurrence"),
         ),
     )
-    conn.commit()
     entry_id = cursor.lastrowid
+    _save_tags(conn, entry_id, data.get("tags", ""))
+    conn.commit()
     conn.close()
     print(json.dumps({"status": "ok", "id": entry_id}))
 
@@ -102,20 +176,26 @@ def cmd_store_batch(data_json):
     ids = []
     for data in entries:
         cursor = conn.execute(
-            """INSERT INTO entries (category, title, content, tags, entry_date, due_date, status, priority)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO entries (category, title, content, entry_date, due_date,
+                                   status, priority, parent_id, location, url, recurrence)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 data.get("category", "note"),
                 data["title"],
                 data.get("content", ""),
-                data.get("tags", ""),
                 data.get("entry_date"),
                 data.get("due_date"),
                 data.get("status", "active"),
                 data.get("priority", "medium"),
+                data.get("parent_id"),
+                data.get("location", ""),
+                data.get("url", ""),
+                data.get("recurrence"),
             ),
         )
-        ids.append(cursor.lastrowid)
+        entry_id = cursor.lastrowid
+        _save_tags(conn, entry_id, data.get("tags", ""))
+        ids.append(entry_id)
 
     conn.commit()
     conn.close()
@@ -132,36 +212,47 @@ def cmd_query(filter_json):
     params = []
 
     if "category" in filters:
-        where_clauses.append("category = ?")
+        where_clauses.append("e.category = ?")
         params.append(filters["category"])
     if "status" in filters:
-        where_clauses.append("status = ?")
+        where_clauses.append("e.status = ?")
         params.append(filters["status"])
     if "from_date" in filters:
-        where_clauses.append("(entry_date >= ? OR due_date >= ?)")
+        where_clauses.append("(e.entry_date >= ? OR e.due_date >= ?)")
         params.extend([filters["from_date"], filters["from_date"]])
     if "to_date" in filters:
-        where_clauses.append("(entry_date <= ? OR due_date <= ?)")
+        where_clauses.append("(e.entry_date <= ? OR e.due_date <= ?)")
         params.extend([filters["to_date"], filters["to_date"]])
     if "priority" in filters:
-        where_clauses.append("priority = ?")
+        where_clauses.append("e.priority = ?")
         params.append(filters["priority"])
     if "tags" in filters:
-        where_clauses.append("(',' || tags || ',' LIKE '%,' || ? || ',%')")
+        where_clauses.append(
+            "e.id IN (SELECT entry_id FROM entry_tags WHERE tag = ?)"
+        )
         params.append(filters["tags"])
+    if "location" in filters:
+        where_clauses.append("e.location LIKE ?")
+        params.append(f"%{filters['location']}%")
+    if "parent_id" in filters:
+        where_clauses.append("e.parent_id = ?")
+        params.append(int(filters["parent_id"]))
     if "id" in filters:
-        where_clauses.append("id = ?")
+        where_clauses.append("e.id = ?")
         params.append(int(filters["id"]))
 
     where = " AND ".join(where_clauses) if where_clauses else "1=1"
     limit = filters.get("limit", 50)
 
     rows = conn.execute(
-        f"SELECT * FROM entries WHERE {where} ORDER BY entry_date DESC, created_at DESC LIMIT ?",
+        f"""SELECT e.* FROM entries e
+            WHERE {where}
+            ORDER BY COALESCE(e.entry_date, '9999-12-31') DESC, e.created_at DESC
+            LIMIT ?""",
         params + [limit],
     ).fetchall()
 
-    result = [dict(row) for row in rows]
+    result = [_entry_to_dict(conn, row) for row in rows]
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -171,14 +262,57 @@ def cmd_search(keyword):
     conn = get_connection()
     ensure_schema(conn)
 
-    rows = conn.execute(
-        """SELECT * FROM entries
-           WHERE title LIKE ? OR content LIKE ? OR tags LIKE ?
-           ORDER BY entry_date DESC, created_at DESC LIMIT 50""",
-        (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"),
-    ).fetchall()
+    # Try FTS5 first, fall back to LIKE if not available
+    try:
+        fts_ids = conn.execute(
+            "SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?",
+            (keyword,),
+        ).fetchall()
+        fts_id_set = {row["rowid"] for row in fts_ids}
+    except sqlite3.OperationalError:
+        fts_id_set = None
 
-    result = [dict(row) for row in rows]
+    # Also search in tags via entry_tags table
+    tag_entry_ids = conn.execute(
+        "SELECT DISTINCT entry_id FROM entry_tags WHERE tag LIKE ?",
+        (f"%{keyword}%",),
+    ).fetchall()
+    tag_id_set = {row["entry_id"] for row in tag_entry_ids}
+
+    if fts_id_set is not None:
+        all_ids = fts_id_set | tag_id_set
+        if not all_ids:
+            conn.close()
+            print(json.dumps([], ensure_ascii=False, indent=2))
+            return
+        placeholders = ",".join("?" for _ in all_ids)
+        rows = conn.execute(
+            f"""SELECT * FROM entries
+                WHERE id IN ({placeholders})
+                ORDER BY COALESCE(entry_date, '9999-12-31') DESC, created_at DESC
+                LIMIT 50""",
+            list(all_ids),
+        ).fetchall()
+    else:
+        # Fallback: LIKE-based search
+        rows = conn.execute(
+            """SELECT * FROM entries
+               WHERE title LIKE ? OR content LIKE ?
+               ORDER BY COALESCE(entry_date, '9999-12-31') DESC, created_at DESC
+               LIMIT 50""",
+            (f"%{keyword}%", f"%{keyword}%"),
+        ).fetchall()
+        like_id_set = {row["id"] for row in rows}
+        all_ids = like_id_set | tag_id_set
+        if tag_id_set - like_id_set:
+            extra_placeholders = ",".join("?" for _ in (tag_id_set - like_id_set))
+            extra_rows = conn.execute(
+                f"SELECT * FROM entries WHERE id IN ({extra_placeholders})",
+                list(tag_id_set - like_id_set),
+            ).fetchall()
+            rows = list(rows) + list(extra_rows)
+
+    result = [_entry_to_dict(conn, row) for row in rows]
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -189,32 +323,40 @@ def cmd_update(entry_id, update_json):
     conn = get_connection()
     ensure_schema(conn)
 
+    entry_id = int(entry_id)
     set_clauses = []
     params = []
 
     allowed_fields = [
-        "category", "title", "content", "tags",
+        "category", "title", "content",
         "entry_date", "due_date", "status", "priority",
+        "parent_id", "location", "url", "recurrence",
     ]
     for field in allowed_fields:
         if field in updates:
             set_clauses.append(f"{field} = ?")
             params.append(updates[field])
 
-    if not set_clauses:
+    # Handle tags separately via entry_tags table
+    if "tags" in updates:
+        conn.execute("DELETE FROM entry_tags WHERE entry_id = ?", (entry_id,))
+        _save_tags(conn, entry_id, updates["tags"])
+
+    if not set_clauses and "tags" not in updates:
         print(json.dumps({"status": "error", "message": "No valid fields to update"}))
         return
 
-    set_clauses.append("updated_at = datetime('now', 'localtime')")
-    params.append(int(entry_id))
+    if set_clauses:
+        set_clauses.append("updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')")
+        params.append(entry_id)
+        conn.execute(
+            f"UPDATE entries SET {', '.join(set_clauses)} WHERE id = ?",
+            params,
+        )
 
-    conn.execute(
-        f"UPDATE entries SET {', '.join(set_clauses)} WHERE id = ?",
-        params,
-    )
     conn.commit()
     conn.close()
-    print(json.dumps({"status": "ok", "id": int(entry_id)}))
+    print(json.dumps({"status": "ok", "id": entry_id}))
 
 
 def cmd_delete(entry_id):
@@ -263,7 +405,7 @@ def cmd_summary(period_json):
     rows = conn.execute(
         """SELECT * FROM entries
            WHERE (entry_date BETWEEN ? AND ?) OR (due_date BETWEEN ? AND ?)
-           ORDER BY category, entry_date, priority DESC""",
+           ORDER BY category, COALESCE(entry_date, '9999-12-31'), priority DESC""",
         (from_date, to_date, from_date, to_date),
     ).fetchall()
 
@@ -275,10 +417,11 @@ def cmd_summary(period_json):
         (from_date, to_date, from_date, to_date),
     ).fetchall()
 
-    # Get overdue items
+    # Get overdue items (only categories where "overdue" is meaningful)
     overdue = conn.execute(
         """SELECT * FROM entries
            WHERE due_date < ? AND status = 'active'
+             AND category IN ('task', 'plan', 'goal')
            ORDER BY due_date, priority DESC""",
         (today,),
     ).fetchall()
@@ -301,11 +444,11 @@ def cmd_summary(period_json):
 
     result = {
         "period": {"from": from_date, "to": to_date, "type": period_type},
-        "entries": [dict(row) for row in rows],
+        "entries": [_entry_to_dict(conn, row) for row in rows],
         "counts": {row["category"]: row["count"] for row in counts},
-        "overdue": [dict(row) for row in overdue],
-        "upcoming_deadlines": [dict(row) for row in upcoming],
-        "active_goals": [dict(row) for row in goals],
+        "overdue": [_entry_to_dict(conn, row) for row in overdue],
+        "upcoming_deadlines": [_entry_to_dict(conn, row) for row in upcoming],
+        "active_goals": [_entry_to_dict(conn, row) for row in goals],
     }
 
     conn.close()
@@ -317,9 +460,11 @@ def cmd_list():
     conn = get_connection()
     ensure_schema(conn)
     rows = conn.execute(
-        "SELECT * FROM entries WHERE status = 'active' ORDER BY entry_date DESC, created_at DESC LIMIT 100"
+        """SELECT * FROM entries WHERE status = 'active'
+           ORDER BY COALESCE(entry_date, '9999-12-31') DESC, created_at DESC
+           LIMIT 100"""
     ).fetchall()
-    result = [dict(row) for row in rows]
+    result = [_entry_to_dict(conn, row) for row in rows]
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

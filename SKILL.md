@@ -49,14 +49,18 @@ For each extracted entry, determine:
 - **entry_date**: The date this entry is about (YYYY-MM-DD). Use today if not specified
 - **due_date**: Deadline if applicable (YYYY-MM-DD), null otherwise
 - **priority**: `high`, `medium`, or `low`
-- **status**: Usually `active` for new entries
+- **status**: `active`, `completed`, or `archived`
+- **parent_id**: ID of a parent entry if this is a sub-task/sub-item (null otherwise)
+- **location**: Where the event/plan takes place (e.g., `Tokyo`, `Conference Room A`)
+- **url**: Related URL or reference link (null otherwise)
+- **recurrence**: For recurring items: `daily`, `weekly`, `biweekly`, `monthly`, or `yearly` (null otherwise)
 
 Then store using the batch command:
 
 ```bash
 python3 SCRIPT store_batch '[
-  {"category":"event","title":"Team sync meeting","content":"Discussed Q1 roadmap with the team. Decided to prioritize feature X.","tags":"work,meeting,team","entry_date":"2025-01-15","priority":"medium"},
-  {"category":"plan","title":"Client presentation","content":"Prepare slides for client demo on Friday.","tags":"work,client","entry_date":"2025-01-17","due_date":"2025-01-17","priority":"high"}
+  {"category":"event","title":"Team sync meeting","content":"Discussed Q1 roadmap with the team. Decided to prioritize feature X.","tags":"work,meeting,team","entry_date":"2025-01-15","priority":"medium","location":"Conference Room B","recurrence":"weekly"},
+  {"category":"plan","title":"Client presentation","content":"Prepare slides for client demo on Friday.","tags":"work,client","entry_date":"2025-01-17","due_date":"2025-01-17","priority":"high","location":"Tokyo Office"}
 ]'
 ```
 
@@ -77,6 +81,8 @@ python3 SCRIPT search 'keyword'
 python3 SCRIPT query '{"category":"goal","status":"active"}'
 python3 SCRIPT query '{"from_date":"2025-01-01","to_date":"2025-01-31","category":"event"}'
 python3 SCRIPT query '{"tags":"work","priority":"high"}'
+python3 SCRIPT query '{"location":"Tokyo"}'
+python3 SCRIPT query '{"parent_id":42}'
 ```
 
 **Get a summary for a time period:**
@@ -101,6 +107,7 @@ Do not just dump raw JSON to the user. Provide a well-organized, human-readable 
 ```bash
 python3 SCRIPT update <id> '{"status":"completed"}'
 python3 SCRIPT update <id> '{"priority":"high","due_date":"2025-02-01"}'
+python3 SCRIPT update <id> '{"location":"Osaka","recurrence":"monthly"}'
 ```
 
 ### 4. When the user wants to DELETE entries
@@ -173,6 +180,18 @@ Action: Parse into 3 entries:
 1. event: Team meeting about release planning (entry_date: today)
 2. task: Complete API design document (due_date: next Wednesday, priority: high)
 3. goal: Get AWS certification (due_date: end of year)
+
+### User reports with location and recurrence (Japanese):
+User: "毎週金曜に渋谷オフィスで1on1がある。来月の東京出張でクライアントAとの打ち合わせもある。"
+
+Action: Parse into 2 entries:
+1. plan: Weekly 1-on-1 (recurrence: weekly, location: Shibuya Office, entry_date: next Friday)
+2. plan: Client A meeting during Tokyo trip (location: Tokyo, entry_date: next month)
+
+### User wants to break down a goal:
+User: "AWS認定資格のゴールにサブタスクを追加して。1. 教材を購入 2. 模擬試験を受ける"
+
+Action: Query for the goal entry, then store 2 tasks with parent_id pointing to the goal.
 
 ### User asks about schedule:
 User: "来週の予定は？"
