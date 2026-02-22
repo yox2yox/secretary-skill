@@ -71,6 +71,98 @@ END;
 """
 
 
+DEFAULT_COLLECTIONS = [
+    {
+        "name": "persons",
+        "display_name": "人物",
+        "description": "ユーザー（オーナー）と周囲の人々のプロフィール",
+        "fields_schema": [
+            {"name": "person_type", "type": "string", "description": "owner（ユーザー自身）または contact（連絡先）"},
+            {"name": "relationship", "type": "string", "description": "関係性（上司、同僚、家族など）"},
+            {"name": "organization", "type": "string", "description": "所属組織"},
+            {"name": "role", "type": "string", "description": "役職"},
+            {"name": "birthday", "type": "date", "description": "誕生日"},
+            {"name": "email", "type": "string", "description": "メールアドレス"},
+            {"name": "phone", "type": "string", "description": "電話番号"},
+            {"name": "personality", "type": "string", "description": "性格特性"},
+            {"name": "preferences", "type": "string", "description": "好み"},
+            {"name": "communication_style", "type": "string", "description": "コミュニケーションスタイル"},
+            {"name": "work_style", "type": "string", "description": "仕事のスタイル"},
+            {"name": "last_contacted_at", "type": "date", "description": "最終連絡日"},
+        ],
+    },
+    {
+        "name": "events",
+        "display_name": "イベント",
+        "description": "起こった出来事や進行中の出来事",
+        "fields_schema": [
+            {"name": "event_date", "type": "date", "description": "イベントの日付"},
+            {"name": "start_time", "type": "time", "description": "開始時刻 (HH:MM)"},
+            {"name": "end_time", "type": "time", "description": "終了時刻 (HH:MM)"},
+            {"name": "location", "type": "string", "description": "場所"},
+            {"name": "source", "type": "string", "description": "情報の出所"},
+            {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": True, "description": "関連人物のアイテムID"},
+        ],
+    },
+    {
+        "name": "plans",
+        "display_name": "計画",
+        "description": "将来の予定された活動",
+        "fields_schema": [
+            {"name": "planned_date", "type": "date", "description": "予定日"},
+            {"name": "start_time", "type": "time", "description": "開始時刻 (HH:MM)"},
+            {"name": "end_time", "type": "time", "description": "終了時刻 (HH:MM)"},
+            {"name": "due_date", "type": "date", "description": "締め切り"},
+            {"name": "priority", "type": "string", "description": "優先度 (high/medium/low)"},
+            {"name": "location", "type": "string", "description": "場所"},
+            {"name": "recurrence", "type": "string", "description": "繰り返しパターン (daily/weekly/monthly/yearly)"},
+            {"name": "recurrence_until", "type": "date", "description": "繰り返し終了日"},
+            {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": True, "description": "関連人物のアイテムID"},
+        ],
+    },
+    {
+        "name": "goals",
+        "display_name": "目標",
+        "description": "目標と抱負",
+        "fields_schema": [
+            {"name": "due_date", "type": "date", "description": "達成期限"},
+            {"name": "priority", "type": "string", "description": "優先度 (high/medium/low)"},
+            {"name": "progress", "type": "string", "description": "進捗状況"},
+        ],
+    },
+    {
+        "name": "tasks",
+        "display_name": "タスク",
+        "description": "実行すべきアクション項目",
+        "fields_schema": [
+            {"name": "due_date", "type": "date", "description": "締め切り"},
+            {"name": "priority", "type": "string", "description": "優先度 (high/medium/low)"},
+            {"name": "assignee", "type": "ref", "ref_collection": "persons", "description": "担当者のアイテムID"},
+            {"name": "related_goal", "type": "ref", "ref_collection": "goals", "description": "関連目標のアイテムID"},
+        ],
+    },
+    {
+        "name": "decisions",
+        "display_name": "決定事項",
+        "description": "決定済みまたは保留中の決定事項",
+        "fields_schema": [
+            {"name": "decided_date", "type": "date", "description": "決定日"},
+            {"name": "context", "type": "string", "description": "決定の背景"},
+            {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": True, "description": "関係者のアイテムID"},
+        ],
+    },
+    {
+        "name": "notes",
+        "display_name": "メモ",
+        "description": "記憶しておく価値のある一般的な情報",
+        "fields_schema": [
+            {"name": "note_date", "type": "date", "description": "メモの日付"},
+            {"name": "source", "type": "string", "description": "情報の出所"},
+        ],
+    },
+]
+
+
 def get_connection():
     """Get a database connection, creating the directory if needed."""
     os.makedirs(DB_DIR, exist_ok=True)
@@ -89,6 +181,29 @@ def ensure_schema(conn):
     except Exception:
         # FTS5 may not be available on all systems; degrade gracefully
         pass
+
+
+def seed_default_collections(conn):
+    """Insert default collections if they don't already exist."""
+    import json as _json
+
+    for col in DEFAULT_COLLECTIONS:
+        existing = conn.execute(
+            "SELECT id FROM collections WHERE name = ?", (col["name"],)
+        ).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            """INSERT INTO collections (name, display_name, description, fields_schema)
+               VALUES (?, ?, ?, ?)""",
+            (
+                col["name"],
+                col["display_name"],
+                col["description"],
+                _json.dumps(col["fields_schema"], ensure_ascii=False),
+            ),
+        )
+    conn.commit()
 
 
 def parse_tags(tags_input):

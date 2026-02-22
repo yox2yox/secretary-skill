@@ -50,114 +50,23 @@ python3 SCRIPT init
 
 ## 基本動作
 
-### 1. 初期コレクションの作成
+### 1. デフォルトコレクション
 
-初回使用時、必要に応じて以下のコレクションを作成してください。ユーザーの用途に
-合わせて自由にコレクションを追加できます。
+`init` コマンドを実行すると、秘書として基本的に必要な以下のコレクションが
+自動的に作成されます（既に存在する場合はスキップされます）。
 
-```bash
-# イベント（起こった出来事、会議、インシデントなど）
-python3 SCRIPT col_create '{
-  "name": "events",
-  "display_name": "イベント",
-  "description": "起こった出来事や進行中の出来事",
-  "fields_schema": [
-    {"name": "event_date", "type": "date", "description": "イベントの日付"},
-    {"name": "start_time", "type": "time", "description": "開始時刻 (HH:MM)"},
-    {"name": "end_time", "type": "time", "description": "終了時刻 (HH:MM)"},
-    {"name": "location", "type": "string", "description": "場所"},
-    {"name": "source", "type": "string", "description": "情報の出所"},
-    {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": true, "description": "関連人物のアイテムID"}
-  ]
-}'
+| コレクション | 表示名 | 説明 |
+|-------------|--------|------|
+| `persons`   | 人物   | ユーザー（オーナー）と周囲の人々のプロフィール |
+| `events`    | イベント | 起こった出来事や進行中の出来事 |
+| `plans`     | 計画   | 将来の予定された活動 |
+| `goals`     | 目標   | 目標と抱負 |
+| `tasks`     | タスク | 実行すべきアクション項目 |
+| `decisions` | 決定事項 | 決定済みまたは保留中の決定事項 |
+| `notes`     | メモ   | 記憶しておく価値のある一般的な情報 |
 
-# 計画（将来の予定）
-python3 SCRIPT col_create '{
-  "name": "plans",
-  "display_name": "計画",
-  "description": "将来の予定された活動",
-  "fields_schema": [
-    {"name": "planned_date", "type": "date", "description": "予定日"},
-    {"name": "start_time", "type": "time", "description": "開始時刻 (HH:MM)"},
-    {"name": "end_time", "type": "time", "description": "終了時刻 (HH:MM)"},
-    {"name": "due_date", "type": "date", "description": "締め切り"},
-    {"name": "priority", "type": "string", "description": "優先度 (high/medium/low)"},
-    {"name": "location", "type": "string", "description": "場所"},
-    {"name": "recurrence", "type": "string", "description": "繰り返しパターン (daily/weekly/monthly/yearly)"},
-    {"name": "recurrence_until", "type": "date", "description": "繰り返し終了日"},
-    {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": true, "description": "関連人物のアイテムID"}
-  ]
-}'
-
-# 目標
-python3 SCRIPT col_create '{
-  "name": "goals",
-  "display_name": "目標",
-  "description": "目標と抱負",
-  "fields_schema": [
-    {"name": "due_date", "type": "date", "description": "達成期限"},
-    {"name": "priority", "type": "string", "description": "優先度 (high/medium/low)"},
-    {"name": "progress", "type": "string", "description": "進捗状況"}
-  ]
-}'
-
-# タスク
-python3 SCRIPT col_create '{
-  "name": "tasks",
-  "display_name": "タスク",
-  "description": "実行すべきアクション項目",
-  "fields_schema": [
-    {"name": "due_date", "type": "date", "description": "締め切り"},
-    {"name": "priority", "type": "string", "description": "優先度 (high/medium/low)"},
-    {"name": "assignee", "type": "ref", "ref_collection": "persons", "description": "担当者のアイテムID"},
-    {"name": "related_goal", "type": "ref", "ref_collection": "goals", "description": "関連目標のアイテムID"}
-  ]
-}'
-
-# 決定事項
-python3 SCRIPT col_create '{
-  "name": "decisions",
-  "display_name": "決定事項",
-  "description": "決定済みまたは保留中の決定事項",
-  "fields_schema": [
-    {"name": "decided_date", "type": "date", "description": "決定日"},
-    {"name": "context", "type": "string", "description": "決定の背景"},
-    {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": true, "description": "関係者のアイテムID"}
-  ]
-}'
-
-# メモ
-python3 SCRIPT col_create '{
-  "name": "notes",
-  "display_name": "メモ",
-  "description": "記憶しておく価値のある一般的な情報",
-  "fields_schema": [
-    {"name": "note_date", "type": "date", "description": "メモの日付"},
-    {"name": "source", "type": "string", "description": "情報の出所"}
-  ]
-}'
-
-# 人物
-python3 SCRIPT col_create '{
-  "name": "persons",
-  "display_name": "人物",
-  "description": "ユーザー（オーナー）と周囲の人々のプロフィール",
-  "fields_schema": [
-    {"name": "person_type", "type": "string", "description": "owner（ユーザー自身）または contact（連絡先）"},
-    {"name": "relationship", "type": "string", "description": "関係性（上司、同僚、家族など）"},
-    {"name": "organization", "type": "string", "description": "所属組織"},
-    {"name": "role", "type": "string", "description": "役職"},
-    {"name": "birthday", "type": "date", "description": "誕生日"},
-    {"name": "email", "type": "string", "description": "メールアドレス"},
-    {"name": "phone", "type": "string", "description": "電話番号"},
-    {"name": "personality", "type": "string", "description": "性格特性"},
-    {"name": "preferences", "type": "string", "description": "好み"},
-    {"name": "communication_style", "type": "string", "description": "コミュニケーションスタイル"},
-    {"name": "work_style", "type": "string", "description": "仕事のスタイル"},
-    {"name": "last_contacted_at", "type": "date", "description": "最終連絡日"}
-  ]
-}'
-```
+各コレクションの `fields_schema` はコード内（`db.py` の `DEFAULT_COLLECTIONS`）に
+定義されています。ユーザーの用途に合わせて自由にコレクションを追加できます。
 
 ### 2. ユーザーが情報を報告した場合
 
