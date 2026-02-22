@@ -435,29 +435,106 @@ proactively suggest creating a collection for it.
 
 ## Tag Management
 
-Tags are shared across entries, persons, and collection items. To maintain
-consistency and prevent fragmentation, follow these rules:
+Tags are shared across entries, persons, and collection items. Each tag can have
+a **schema** that defines expected data fields. This ensures consistency — all
+entities with the same tag follow the same data structure.
 
-1. **Always check existing tags before adding new ones.** Before storing any entry,
-   person, or collection item with tags, run `tags_list` to see what tags already exist:
+### Tag schemas
+
+Tags can have associated schemas that define what `data` fields (for collection items)
+or what information (for entries/persons) should be captured. When an entity is tagged,
+check and follow the tag's schema.
+
+**Define a tag schema:**
+```bash
+python3 SCRIPT tag_schema_set '{
+  "tag": "project",
+  "display_name": "プロジェクト",
+  "description": "社内プロジェクトに関するデータ",
+  "fields_schema": [
+    {"name": "status", "type": "string", "description": "進捗状態 (計画中/進行中/完了/中止)", "required": true},
+    {"name": "deadline", "type": "date", "description": "期限"},
+    {"name": "budget", "type": "number", "description": "予算（万円）"},
+    {"name": "team_size", "type": "number", "description": "チーム人数"},
+    {"name": "owner", "type": "string", "description": "責任者名"}
+  ]
+}'
+```
+
+**Example tag schemas:**
+```bash
+# 部署タグ
+python3 SCRIPT tag_schema_set '{
+  "tag": "department",
+  "display_name": "部署",
+  "description": "組織の部署情報",
+  "fields_schema": [
+    {"name": "head_count", "type": "number", "description": "人数", "required": true},
+    {"name": "manager", "type": "string", "description": "部門長"},
+    {"name": "location", "type": "string", "description": "オフィス所在地"}
+  ]
+}'
+
+# 製品タグ
+python3 SCRIPT tag_schema_set '{
+  "tag": "product",
+  "display_name": "製品",
+  "description": "製品・サービス情報",
+  "fields_schema": [
+    {"name": "version", "type": "string", "description": "現在のバージョン"},
+    {"name": "platform", "type": "string", "description": "対応プラットフォーム"},
+    {"name": "release_date", "type": "date", "description": "リリース日"},
+    {"name": "status", "type": "string", "description": "ステータス (開発中/リリース済/EOL)"}
+  ]
+}'
+```
+
+**Get a tag's schema:**
+```bash
+python3 SCRIPT tag_schema_get project
+```
+
+**List all tag schemas:**
+```bash
+python3 SCRIPT tag_schema_list
+```
+
+**Delete a tag schema:**
+```bash
+python3 SCRIPT tag_schema_delete project
+```
+
+### Using tag schemas when storing data
+
+When storing entries or collection items with tags:
+
+1. **Check `tags_list`** to see existing tags and their schemas:
    ```bash
    python3 SCRIPT tags_list
-   python3 SCRIPT tags_list entries
-   python3 SCRIPT tags_list persons
-   python3 SCRIPT tags_list items
    ```
+   The output includes `has_schema`, `fields_schema` for tags that have a schema defined.
 
-2. **Reuse existing tags.** If an existing tag covers the same concept, use it instead
-   of creating a new one. For example, if `engineering` already exists, do NOT create
+2. **If a tag has a schema**, ensure the `data` field (for collection items) or `content`
+   (for entries) includes all required fields defined in the schema. For example, if the
+   user says "プロジェクトXを登録して" and the `project` tag has a schema, ask for or
+   infer the fields: status, deadline, budget, etc.
+
+3. **If adding a new tag** that will be used for multiple similar entities, proactively
+   suggest defining a schema for it so future entries stay consistent.
+
+### Tag naming rules
+
+1. **Always check existing tags before adding new ones.** Reuse existing tags
+   that cover the same concept. For example, if `engineering` exists, do NOT create
    `eng`, `エンジニアリング`, or `Engineering` as separate tags.
 
-3. **Use consistent naming conventions:**
+2. **Naming conventions:**
    - Use lowercase with hyphens for multi-word tags: `project-alpha`, `team-lead`
    - Prefer English for technical/universal terms: `frontend`, `backend`, `meeting`
    - Japanese is acceptable for Japan-specific concepts: `経理`, `総務`
    - Avoid abbreviations when the full word is already in use
 
-4. **When a similar tag exists**, prefer the existing one. If the user explicitly
+3. **When a similar tag exists**, prefer the existing one. If the user explicitly
    uses a different term, ask if they want to reuse the existing tag or create a new one.
 
 ## Database Initialization
