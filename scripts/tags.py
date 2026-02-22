@@ -5,37 +5,15 @@ import json
 from db import get_connection, ensure_schema
 
 
-def cmd_tags_list(source=None):
-    """List all unique tags across all tables with usage counts and schema info.
-
-    Optional source filter: 'entries', 'persons', 'items', or None for all.
-    """
+def cmd_tags_list():
+    """List all unique tags with usage counts and schema info."""
     conn = get_connection()
     ensure_schema(conn)
 
-    queries = []
-
-    if source is None or source == "entries":
-        queries.append(
-            "SELECT tag, 'entry' as source, COUNT(*) as count FROM entry_tags GROUP BY tag"
-        )
-    if source is None or source == "persons":
-        queries.append(
-            "SELECT tag, 'person' as source, COUNT(*) as count FROM person_tags GROUP BY tag"
-        )
-    if source is None or source == "items":
-        queries.append(
-            "SELECT tag, 'collection_item' as source, COUNT(*) as count FROM collection_item_tags GROUP BY tag"
-        )
-
-    if not queries:
-        print(json.dumps({"status": "error", "message": "Invalid source filter. Use: entries, persons, items"}))
-        return
-
-    # Get per-source counts
-    all_rows = []
-    for q in queries:
-        all_rows.extend(conn.execute(q).fetchall())
+    # Get per-tag counts
+    tag_rows = conn.execute(
+        "SELECT tag, COUNT(*) as count FROM collection_item_tags GROUP BY tag"
+    ).fetchall()
 
     # Get all tag schemas
     schema_rows = conn.execute("SELECT * FROM tag_schemas").fetchall()
@@ -50,17 +28,14 @@ def cmd_tags_list(source=None):
 
     # Aggregate by tag
     tag_data = {}
-    for row in all_rows:
+    for row in tag_rows:
         tag = row["tag"]
-        if tag not in tag_data:
-            tag_data[tag] = {"tag": tag, "total_count": 0, "sources": {}}
-        tag_data[tag]["total_count"] += row["count"]
-        tag_data[tag]["sources"][row["source"]] = row["count"]
+        tag_data[tag] = {"tag": tag, "count": row["count"]}
 
     # Include tags that have a schema but no usage yet
     for tag, schema in schemas.items():
         if tag not in tag_data:
-            tag_data[tag] = {"tag": tag, "total_count": 0, "sources": {}}
+            tag_data[tag] = {"tag": tag, "count": 0}
 
     # Merge schema info
     for tag, data in tag_data.items():
@@ -72,7 +47,7 @@ def cmd_tags_list(source=None):
         else:
             data["has_schema"] = False
 
-    result = sorted(tag_data.values(), key=lambda x: (-x["total_count"], x["tag"]))
+    result = sorted(tag_data.values(), key=lambda x: (-x["count"], x["tag"]))
 
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -150,7 +125,7 @@ def cmd_tag_schema_list():
 
 
 def cmd_tag_schema_delete(tag):
-    """Delete a tag's schema definition (does not remove the tag from entities)."""
+    """Delete a tag's schema definition (does not remove the tag from items)."""
     conn = get_connection()
     ensure_schema(conn)
     conn.execute("DELETE FROM tag_schemas WHERE tag = ?", (tag,))
