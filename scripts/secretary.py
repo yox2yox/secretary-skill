@@ -28,6 +28,7 @@ Commands:
     attr_set <person_id> '<json>'         Set attributes
     attr_delete <attr_id>                 Delete an attribute
     attr_list <person_id> [category]      List attributes
+    tags_list [source]                    List all tags (entries|persons|items)
     col_create '<json>'                   Create a new collection
     col_list                              List all collections
     col_get <id>                          Get collection details
@@ -221,20 +222,20 @@ CREATE TRIGGER IF NOT EXISTS persons_fts_au AFTER UPDATE ON persons BEGIN
 END;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS collection_items_fts USING fts5(
-    title, content,
+    title, content, data,
     content=collection_items, content_rowid=id,
     tokenize='trigram'
 );
 
 CREATE TRIGGER IF NOT EXISTS collection_items_fts_ai AFTER INSERT ON collection_items BEGIN
-    INSERT INTO collection_items_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+    INSERT INTO collection_items_fts(rowid, title, content, data) VALUES (new.id, new.title, new.content, new.data);
 END;
 CREATE TRIGGER IF NOT EXISTS collection_items_fts_ad AFTER DELETE ON collection_items BEGIN
-    INSERT INTO collection_items_fts(collection_items_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
+    INSERT INTO collection_items_fts(collection_items_fts, rowid, title, content, data) VALUES('delete', old.id, old.title, old.content, old.data);
 END;
 CREATE TRIGGER IF NOT EXISTS collection_items_fts_au AFTER UPDATE ON collection_items BEGIN
-    INSERT INTO collection_items_fts(collection_items_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
-    INSERT INTO collection_items_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+    INSERT INTO collection_items_fts(collection_items_fts, rowid, title, content, data) VALUES('delete', old.id, old.title, old.content, old.data);
+    INSERT INTO collection_items_fts(rowid, title, content, data) VALUES (new.id, new.title, new.content, new.data);
 END;
 """
 
@@ -991,6 +992,57 @@ def cmd_person_tag_remove(person_id, tag):
     print(json.dumps({"status": "ok", "person_id": int(person_id), "tag": tag.strip()}))
 
 
+## ── Tag listing command ──────────────────────────────────────────────
+
+
+def cmd_tags_list(source=None):
+    """List all unique tags across all tables with usage counts.
+
+    Optional source filter: 'entries', 'persons', 'items', or None for all.
+    """
+    conn = get_connection()
+    ensure_schema(conn)
+
+    queries = []
+    params = []
+
+    if source is None or source == "entries":
+        queries.append(
+            "SELECT tag, 'entry' as source, COUNT(*) as count FROM entry_tags GROUP BY tag"
+        )
+    if source is None or source == "persons":
+        queries.append(
+            "SELECT tag, 'person' as source, COUNT(*) as count FROM person_tags GROUP BY tag"
+        )
+    if source is None or source == "items":
+        queries.append(
+            "SELECT tag, 'collection_item' as source, COUNT(*) as count FROM collection_item_tags GROUP BY tag"
+        )
+
+    if not queries:
+        print(json.dumps({"status": "error", "message": "Invalid source filter. Use: entries, persons, items"}))
+        return
+
+    # Get per-source counts
+    all_rows = []
+    for q in queries:
+        all_rows.extend(conn.execute(q).fetchall())
+
+    # Aggregate by tag
+    tag_data = {}
+    for row in all_rows:
+        tag = row["tag"]
+        if tag not in tag_data:
+            tag_data[tag] = {"tag": tag, "total_count": 0, "sources": {}}
+        tag_data[tag]["total_count"] += row["count"]
+        tag_data[tag]["sources"][row["source"]] = row["count"]
+
+    result = sorted(tag_data.values(), key=lambda x: (-x["total_count"], x["tag"]))
+
+    conn.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 ## ── Person attribute commands ─────────────────────────────────────────
 
 
@@ -1540,7 +1592,7 @@ def main():
         print("         entry_link, entry_unlink, person_entries,")
         print("         person_add, person_update, person_delete, person_get, person_list,")
         print("         person_search, person_tag_add, person_tag_remove,")
-        print("         attr_set, attr_delete, attr_list,")
+        print("         attr_set, attr_delete, attr_list, tags_list,")
         print("         col_create, col_list, col_get, col_update, col_delete,")
         print("         item_add, item_add_batch, item_get, item_update, item_delete,")
         print("         item_list, item_search, item_relate, item_unrelate")
@@ -1599,6 +1651,9 @@ def main():
             cmd_attr_delete(sys.argv[2])
         elif command == "attr_list":
             cmd_attr_list(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
+        # Tag listing
+        elif command == "tags_list":
+            cmd_tags_list(sys.argv[2] if len(sys.argv) > 2 else None)
         # Collection commands
         elif command == "col_create":
             cmd_col_create(sys.argv[2])

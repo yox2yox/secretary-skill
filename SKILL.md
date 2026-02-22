@@ -66,7 +66,8 @@ For each extracted entry, determine:
 - **source**: Where the information came from (e.g., `メール`, `Slack`, `会議`)
 - **person_ids**: List of person IDs related to this entry (optional)
 
-Then store using the batch command:
+Before storing, check existing tags with `python3 SCRIPT tags_list` to reuse
+consistent tag names. Then store using the batch command:
 
 ```bash
 python3 SCRIPT store_batch '[
@@ -431,6 +432,33 @@ proactively suggest creating a collection for it.
    - Goals that haven't had recent activity
    - Patterns (e.g., "You've had 5 meetings this week")
    - People you haven't contacted recently (using last_contacted_at)
+
+## Tag Management
+
+Tags are shared across entries, persons, and collection items. To maintain
+consistency and prevent fragmentation, follow these rules:
+
+1. **Always check existing tags before adding new ones.** Before storing any entry,
+   person, or collection item with tags, run `tags_list` to see what tags already exist:
+   ```bash
+   python3 SCRIPT tags_list
+   python3 SCRIPT tags_list entries
+   python3 SCRIPT tags_list persons
+   python3 SCRIPT tags_list items
+   ```
+
+2. **Reuse existing tags.** If an existing tag covers the same concept, use it instead
+   of creating a new one. For example, if `engineering` already exists, do NOT create
+   `eng`, `エンジニアリング`, or `Engineering` as separate tags.
+
+3. **Use consistent naming conventions:**
+   - Use lowercase with hyphens for multi-word tags: `project-alpha`, `team-lead`
+   - Prefer English for technical/universal terms: `frontend`, `backend`, `meeting`
+   - Japanese is acceptable for Japan-specific concepts: `経理`, `総務`
+   - Avoid abbreviations when the full word is already in use
+
+4. **When a similar tag exists**, prefer the existing one. If the user explicitly
+   uses a different term, ask if they want to reuse the existing tag or create a new one.
 
 ## Database Initialization
 
