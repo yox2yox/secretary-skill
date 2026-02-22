@@ -21,6 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name);
 CREATE TABLE IF NOT EXISTS collection_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    type TEXT,
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     data TEXT NOT NULL DEFAULT '{}',
@@ -43,7 +44,6 @@ CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag ON collection_item_tags(
 
 CREATE TABLE IF NOT EXISTS tag_schemas (
     tag TEXT PRIMARY KEY,
-    kind TEXT NOT NULL DEFAULT 'tag' CHECK(kind IN ('tag', 'type')),
     display_name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     fields_schema TEXT NOT NULL DEFAULT '[]',
@@ -174,17 +174,17 @@ def get_connection():
     return conn
 
 
-def _migrate_tag_schemas_kind(conn):
-    """Add 'kind' column to tag_schemas if it doesn't exist (migration)."""
-    cols = [row[1] for row in conn.execute("PRAGMA table_info(tag_schemas)").fetchall()]
-    if "kind" not in cols:
-        conn.execute("ALTER TABLE tag_schemas ADD COLUMN kind TEXT NOT NULL DEFAULT 'tag' CHECK(kind IN ('tag', 'type'))")
+def _migrate_collection_items_type(conn):
+    """Add 'type' column to collection_items if it doesn't exist (migration)."""
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(collection_items)").fetchall()]
+    if "type" not in cols:
+        conn.execute("ALTER TABLE collection_items ADD COLUMN type TEXT")
 
 
 def ensure_schema(conn):
     """Ensure the database schema exists."""
     conn.executescript(SCHEMA_SQL)
-    _migrate_tag_schemas_kind(conn)
+    _migrate_collection_items_type(conn)
     try:
         conn.executescript(FTS_SQL)
     except Exception:

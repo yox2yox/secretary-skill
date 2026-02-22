@@ -161,6 +161,7 @@ python3 SCRIPT item_search 'キーワード' <collection_id>
 ```bash
 python3 SCRIPT item_list <collection_id>
 python3 SCRIPT item_list <collection_id> '{"status": "active"}'
+python3 SCRIPT item_list <collection_id> '{"type": "project"}'
 python3 SCRIPT item_list <collection_id> '{"tag": "work"}'
 python3 SCRIPT item_list <collection_id> '{"parent_id": null}'
 ```
@@ -185,6 +186,7 @@ python3 SCRIPT item_get <item_id>
 ```bash
 python3 SCRIPT item_update <item_id> '{"status": "completed"}'
 python3 SCRIPT item_update <item_id> '{"data": {"priority": "high", "due_date": "2025-02-01"}}'
+python3 SCRIPT item_update <item_id> '{"type": "meeting-notes"}'
 python3 SCRIPT item_update <item_id> '{"tags": "work,urgent"}'
 ```
 
@@ -265,42 +267,28 @@ python3 SCRIPT item_add <col_id> '{"title": "フロントエンドチーム", "d
 python3 SCRIPT item_list <col_id> '{"parent_id": null}'
 ```
 
-## タグ管理
+## タイプ（type）
 
-タグはすべてのアイテム間で共有されます。タグには2つの種別（`kind`）があります：
+`type` はアイテムの情報の種類を定義するフィールドです。`collection_items` テーブルの
+カラムとして直接保持され、1アイテムにつき1つだけ設定できます（または未設定）。
 
-| kind   | 説明 | 選択数 |
-|--------|------|--------|
-| `tag`  | 分類・ラベル用の通常タグ | 複数可 |
-| `type` | データスキーマを決定するタイプタグ | **1アイテムにつき1つのみ** |
+タイプごとに `tag_schema_set` でスキーマを定義すると、そのタイプのアイテムの
+`data` フィールドに期待される構造を明示できます。
 
-`type`タグは`fields_schema`を持ち、そのアイテムの`data`フィールドに期待される
-構造を定義します。1つのアイテムに複数の`type`タグを付けることはできません。
-通常の`tag`は従来どおり複数付けることができます。
-
-アイテム取得時、`type`タグは`"type"`フィールドとして返され、通常のタグは
-`"tags"`配列として返されます。
-
-**全タグを一覧表示：**
+**アイテムにタイプを設定して保存：**
 ```bash
-python3 SCRIPT tags_list
-```
-
-**タグスキーマを定義する（通常タグ）：**
-```bash
-python3 SCRIPT tag_schema_set '{
-  "tag": "urgent",
-  "kind": "tag",
-  "display_name": "緊急",
-  "description": "緊急度の高いアイテム"
+python3 SCRIPT item_add <col_id> '{
+  "title": "プロジェクトAlpha",
+  "type": "project",
+  "data": {"status": "進行中", "deadline": "2025-06-01", "budget": 500},
+  "tags": "work,frontend"
 }'
 ```
 
-**タイプタグスキーマを定義する（type）：**
+**タイプのスキーマを定義：**
 ```bash
 python3 SCRIPT tag_schema_set '{
   "tag": "project",
-  "kind": "type",
   "display_name": "プロジェクト",
   "description": "社内プロジェクトに関するデータ",
   "fields_schema": [
@@ -311,11 +299,31 @@ python3 SCRIPT tag_schema_set '{
 }'
 ```
 
-**タグスキーマを取得/一覧/削除：**
+**タイプスキーマの取得/一覧/削除：**
 ```bash
-python3 SCRIPT tag_schema_get <tag>
+python3 SCRIPT tag_schema_get <type_name>
 python3 SCRIPT tag_schema_list
-python3 SCRIPT tag_schema_delete <tag>
+python3 SCRIPT tag_schema_delete <type_name>
+```
+
+**タイプでアイテムを絞り込み：**
+```bash
+python3 SCRIPT item_list <col_id> '{"type": "project"}'
+```
+
+**タイプの更新：**
+```bash
+python3 SCRIPT item_update <item_id> '{"type": "meeting-notes"}'
+```
+
+## タグ（tags）
+
+タグは検索・分類用のラベルです。1アイテムに複数付けることができます。
+タイプとは独立した概念で、`collection_item_tags` テーブルに保存されます。
+
+**全タグを一覧表示：**
+```bash
+python3 SCRIPT tags_list
 ```
 
 ### タグの命名規則
@@ -324,7 +332,6 @@ python3 SCRIPT tag_schema_delete <tag>
 2. 複数語のタグにはハイフン区切りの小文字を使用：`project-alpha`、`team-lead`
 3. 技術的・汎用的な用語には英語を推奨：`frontend`、`backend`、`meeting`
 4. 日本固有の概念には日本語も可：`経理`、`総務`
-5. データスキーマを決定するタグは `kind: "type"` で定義してください
 
 ## レスポンスガイドライン
 

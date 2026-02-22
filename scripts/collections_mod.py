@@ -5,24 +5,6 @@ import json
 from db import get_connection, ensure_schema, seed_default_collections, parse_tags, DB_PATH
 
 
-def _validate_single_type_tag(conn, tags):
-    """Validate that at most one 'type'-kind tag is present.
-
-    Returns (type_tags, error_message). error_message is None if valid.
-    """
-    if not tags:
-        return [], None
-    placeholders = ",".join("?" for _ in tags)
-    rows = conn.execute(
-        f"SELECT tag FROM tag_schemas WHERE kind = 'type' AND tag IN ({placeholders})",
-        tags,
-    ).fetchall()
-    type_tags = [r["tag"] for r in rows]
-    if len(type_tags) > 1:
-        return type_tags, f"Multiple type tags not allowed (got: {', '.join(type_tags)}). Only one type tag can be assigned per item."
-    return type_tags, None
-
-
 def _save_item_tags(conn, item_id, tags):
     """Save tags for a collection item."""
     for tag in tags:
@@ -33,7 +15,7 @@ def _save_item_tags(conn, item_id, tags):
 
 
 def _enrich_items(conn, items):
-    """Add tags and type to item dicts (batch)."""
+    """Add tags to item dicts (batch). Type is already a column on the item."""
     if not items:
         return items
 
@@ -56,49 +38,24 @@ def _enrich_items(conn, items):
     for row in tag_rows:
         tags_map.setdefault(row["item_id"], []).append(row["tag"])
 
-    # Lookup which tags are 'type'-kind
-    all_tags = set()
-    for tag_list in tags_map.values():
-        all_tags.update(tag_list)
-    type_tags = set()
-    if all_tags:
-        tp = ",".join("?" for _ in all_tags)
-        type_rows = conn.execute(
-            f"SELECT tag FROM tag_schemas WHERE kind = 'type' AND tag IN ({tp})",
-            list(all_tags),
-        ).fetchall()
-        type_tags = {r["tag"] for r in type_rows}
-
     for item in items:
-        item_tags = tags_map.get(item["id"], [])
-        item["tags"] = [t for t in item_tags if t not in type_tags]
-        item_type_tags = [t for t in item_tags if t in type_tags]
-        item["type"] = item_type_tags[0] if item_type_tags else None
+        item["tags"] = tags_map.get(item["id"], [])
 
     return items
 
 
 def _insert_item(conn, collection_id, data):
-    """Insert a single collection item and return its ID.
-
-    Returns item_id on success, or raises ValueError if tag validation fails.
-    """
-    tags = parse_tags(data.get("tags", ""))
-
-    # Validate type-tag constraint before inserting
-    _, err = _validate_single_type_tag(conn, tags)
-    if err:
-        raise ValueError(err)
-
+    """Insert a single collection item and return its ID."""
     item_data = data.get("data", {})
     if isinstance(item_data, dict):
         item_data = json.dumps(item_data, ensure_ascii=False)
 
     cursor = conn.execute(
-        """INSERT INTO collection_items (collection_id, title, content, data, parent_id, status)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO collection_items (collection_id, type, title, content, data, parent_id, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             int(collection_id),
+            data.get("type"),
             data["title"],
             data.get("content", ""),
             item_data,
@@ -108,6 +65,7 @@ def _insert_item(conn, collection_id, data):
     )
     item_id = cursor.lastrowid
 
+    tags = parse_tags(data.get("tags", ""))
     _save_item_tags(conn, item_id, tags)
 
     return item_id
@@ -259,12 +217,7 @@ def cmd_item_add(collection_id, data_json):
     conn = get_connection()
     ensure_schema(conn)
 
-    try:
-        item_id = _insert_item(conn, collection_id, data)
-    except ValueError as e:
-        conn.close()
-        print(json.dumps({"status": "error", "message": str(e)}))
-        return
+    item_id = _insert_item(conn, collection_id, data)
 
     conn.commit()
     conn.close()
@@ -278,13 +231,8 @@ def cmd_item_add_batch(collection_id, data_json):
     ensure_schema(conn)
 
     ids = []
-    try:
-        for data in items:
-            ids.append(_insert_item(conn, collection_id, data))
-    except ValueError as e:
-        conn.close()
-        print(json.dumps({"status": "error", "message": str(e)}))
-        return
+    for data in items:
+        ids.append(_insert_item(conn, collection_id, data))
 
     conn.commit()
     conn.close()
@@ -335,7 +283,7 @@ def cmd_item_update(item_id, update_json):
     set_clauses = []
     params = []
 
-    for field in ("title", "content", "parent_id", "status"):
+    for field in ("type", "title", "content", "parent_id", "status"):
         if field in updates:
             set_clauses.append(f"{field} = ?")
             params.append(updates[field])
@@ -374,13 +322,8 @@ def cmd_item_update(item_id, update_json):
         )
 
     if has_tags:
-        tags = parse_tags(updates["tags"])
-        _, err = _validate_single_type_tag(conn, tags)
-        if err:
-            conn.close()
-            print(json.dumps({"status": "error", "message": err}))
-            return
         conn.execute("DELETE FROM collection_item_tags WHERE item_id = ?", (int(item_id),))
+        tags = parse_tags(updates["tags"])
         _save_item_tags(conn, int(item_id), tags)
 
     conn.commit()
@@ -416,6 +359,9 @@ def cmd_item_list(collection_id, filter_json=None):
         else:
             where_clauses.append("ci.parent_id = ?")
             params.append(int(filters["parent_id"]))
+    if "type" in filters:
+        where_clauses.append("ci.type = ?")
+        params.append(filters["type"])
     if "tag" in filters:
         where_clauses.append(
             "EXISTS (SELECT 1 FROM collection_item_tags t WHERE t.item_id = ci.id AND t.tag = ?)"
