@@ -2,15 +2,32 @@
 """Secretary Skill - SQLite storage for personal information management.
 
 Usage:
-    python3 secretary.py init
-    python3 secretary.py store '<json>'
-    python3 secretary.py store_batch '<json_array>'
-    python3 secretary.py query '<json_filter>'
-    python3 secretary.py search '<keyword>'
-    python3 secretary.py update <id> '<json>'
-    python3 secretary.py delete <id>
-    python3 secretary.py summary '<json>'
-    python3 secretary.py list
+    python3 secretary.py <command> [args...]
+
+Commands:
+    init                                  Initialize the database
+    store '<json>'                        Store a single entry
+    store_batch '<json_array>'            Store multiple entries
+    query '<json_filter>'                 Query entries with filters
+    search '<keyword>'                    Full-text search entries
+    update <id> '<json>'                  Update an entry
+    delete <id>                           Delete an entry
+    summary '<json>'                      Get a period summary
+    list                                  List all active entries
+    entry_link <entry_id> '<json>'        Link person(s) to an entry
+    entry_unlink <entry_id> <person_id>   Unlink a person from an entry
+    person_entries <person_id>            List entries linked to a person
+    person_add '<json>'                   Add a new person
+    person_update <id> '<json>'           Update a person
+    person_delete <id>                    Delete a person
+    person_get <id>                       Get a person with attributes
+    person_list ['<json_filter>']         List persons
+    person_search '<keyword>'             Search persons
+    person_tag_add <person_id> <tag>      Add a tag to a person
+    person_tag_remove <person_id> <tag>   Remove a tag from a person
+    attr_set <person_id> '<json>'         Set attributes
+    attr_delete <attr_id>                 Delete an attribute
+    attr_list <person_id> [category]      List attributes
 """
 
 import sqlite3
@@ -25,14 +42,22 @@ DB_PATH = os.path.join(DB_DIR, "data.db")
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('event', 'plan', 'goal', 'task', 'decision', 'note')),
     title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    tags TEXT DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
     entry_date TEXT,
+    start_time TEXT,
+    end_time TEXT,
     due_date TEXT,
-    status TEXT DEFAULT 'active',
-    priority TEXT DEFAULT 'medium',
+    status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'cancelled', 'on_hold')),
+    priority TEXT DEFAULT 'medium' CHECK(priority IN ('high', 'medium', 'low')),
+    parent_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+    location TEXT DEFAULT '',
+    url TEXT DEFAULT '',
+    recurrence TEXT DEFAULT '',
+    recurrence_until TEXT,
+    source TEXT DEFAULT '',
+    completed_at TEXT,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
@@ -41,22 +66,40 @@ CREATE INDEX IF NOT EXISTS idx_entries_entry_date ON entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_entries_status ON entries(status);
 CREATE INDEX IF NOT EXISTS idx_entries_due_date ON entries(due_date);
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
+CREATE INDEX IF NOT EXISTS idx_entries_parent_id ON entries(parent_id);
+CREATE INDEX IF NOT EXISTS idx_entries_category_status ON entries(category, status);
+CREATE INDEX IF NOT EXISTS idx_entries_status_due_date ON entries(status, due_date);
+
+CREATE TABLE IF NOT EXISTS entry_tags (
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (entry_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
 
 CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    person_type TEXT NOT NULL DEFAULT 'contact',
+    person_type TEXT NOT NULL DEFAULT 'contact' CHECK(person_type IN ('owner', 'contact')),
     name TEXT NOT NULL,
     relationship TEXT DEFAULT '',
     organization TEXT DEFAULT '',
     role TEXT DEFAULT '',
     birthday TEXT,
-    email TEXT DEFAULT '',
     notes TEXT DEFAULT '',
+    last_contacted_at TEXT,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_persons_person_type ON persons(person_type);
 CREATE INDEX IF NOT EXISTS idx_persons_name ON persons(name);
+
+CREATE TABLE IF NOT EXISTS entry_persons (
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    role TEXT DEFAULT '',
+    PRIMARY KEY (entry_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS idx_entry_persons_person_id ON entry_persons(person_id);
 
 CREATE TABLE IF NOT EXISTS person_attributes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +114,49 @@ CREATE TABLE IF NOT EXISTS person_attributes (
 CREATE INDEX IF NOT EXISTS idx_person_attributes_person_id ON person_attributes(person_id);
 CREATE INDEX IF NOT EXISTS idx_person_attributes_category ON person_attributes(category);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_person_attributes_unique ON person_attributes(person_id, category, key);
+
+CREATE TABLE IF NOT EXISTS person_tags (
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (person_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_person_tags_tag ON person_tags(tag);
+"""
+
+FTS_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+    title, content,
+    content=entries, content_rowid=id,
+    tokenize='trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_ai AFTER INSERT ON entries BEGIN
+    INSERT INTO entries_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS entries_fts_ad AFTER DELETE ON entries BEGIN
+    INSERT INTO entries_fts(entries_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS entries_fts_au AFTER UPDATE ON entries BEGIN
+    INSERT INTO entries_fts(entries_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
+    INSERT INTO entries_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS persons_fts USING fts5(
+    name, organization, role, notes,
+    content=persons, content_rowid=id,
+    tokenize='trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS persons_fts_ai AFTER INSERT ON persons BEGIN
+    INSERT INTO persons_fts(rowid, name, organization, role, notes) VALUES (new.id, new.name, new.organization, new.role, new.notes);
+END;
+CREATE TRIGGER IF NOT EXISTS persons_fts_ad AFTER DELETE ON persons BEGIN
+    INSERT INTO persons_fts(persons_fts, rowid, name, organization, role, notes) VALUES('delete', old.id, old.name, old.organization, old.role, old.notes);
+END;
+CREATE TRIGGER IF NOT EXISTS persons_fts_au AFTER UPDATE ON persons BEGIN
+    INSERT INTO persons_fts(persons_fts, rowid, name, organization, role, notes) VALUES('delete', old.id, old.name, old.organization, old.role, old.notes);
+    INSERT INTO persons_fts(rowid, name, organization, role, notes) VALUES (new.id, new.name, new.organization, new.role, new.notes);
+END;
 """
 
 
@@ -87,6 +173,124 @@ def get_connection():
 def ensure_schema(conn):
     """Ensure the database schema exists."""
     conn.executescript(SCHEMA_SQL)
+    try:
+        conn.executescript(FTS_SQL)
+    except Exception:
+        # FTS5 may not be available on all systems; degrade gracefully
+        pass
+
+
+## ── Helper functions ──────────────────────────────────────────────────
+
+
+def _parse_tags(tags_input):
+    """Parse tags from string or list input."""
+    if isinstance(tags_input, list):
+        return [t.strip() for t in tags_input if t.strip()]
+    if isinstance(tags_input, str) and tags_input.strip():
+        return [t.strip() for t in tags_input.split(",") if t.strip()]
+    return []
+
+
+def _save_entry_tags(conn, entry_id, tags):
+    """Save tags for an entry."""
+    for tag in tags:
+        conn.execute(
+            "INSERT OR IGNORE INTO entry_tags (entry_id, tag) VALUES (?, ?)",
+            (entry_id, tag),
+        )
+
+
+def _save_entry_persons(conn, entry_id, person_ids):
+    """Link persons to an entry from a list of IDs or dicts."""
+    if isinstance(person_ids, list):
+        for item in person_ids:
+            if isinstance(item, dict):
+                pid = int(item["person_id"])
+                role = item.get("role", "")
+            else:
+                pid = int(item)
+                role = ""
+            conn.execute(
+                "INSERT OR IGNORE INTO entry_persons (entry_id, person_id, role) VALUES (?, ?, ?)",
+                (entry_id, pid, role),
+            )
+
+
+def _enrich_entries(conn, entries):
+    """Add tags and linked persons to entry dicts (batch, avoids N+1)."""
+    if not entries:
+        return entries
+
+    entry_ids = [e["id"] for e in entries]
+    placeholders = ",".join("?" for _ in entry_ids)
+
+    # Tags
+    tag_rows = conn.execute(
+        f"SELECT entry_id, tag FROM entry_tags WHERE entry_id IN ({placeholders}) ORDER BY entry_id, tag",
+        entry_ids,
+    ).fetchall()
+    tags_map = {}
+    for row in tag_rows:
+        tags_map.setdefault(row["entry_id"], []).append(row["tag"])
+
+    # Linked persons
+    person_rows = conn.execute(
+        f"""SELECT ep.entry_id, ep.role, p.id as person_id, p.name
+            FROM entry_persons ep JOIN persons p ON ep.person_id = p.id
+            WHERE ep.entry_id IN ({placeholders})
+            ORDER BY ep.entry_id, p.name""",
+        entry_ids,
+    ).fetchall()
+    persons_map = {}
+    for row in person_rows:
+        persons_map.setdefault(row["entry_id"], []).append({
+            "person_id": row["person_id"],
+            "name": row["name"],
+            "role": row["role"],
+        })
+
+    for entry in entries:
+        entry["tags"] = tags_map.get(entry["id"], [])
+        entry["persons"] = persons_map.get(entry["id"], [])
+
+    return entries
+
+
+def _enrich_persons(conn, persons):
+    """Add attributes and tags to person dicts (batch, avoids N+1)."""
+    if not persons:
+        return persons
+
+    person_ids = [p["id"] for p in persons]
+    placeholders = ",".join("?" for _ in person_ids)
+
+    # Attributes
+    attr_rows = conn.execute(
+        f"SELECT * FROM person_attributes WHERE person_id IN ({placeholders}) ORDER BY person_id, category, key",
+        person_ids,
+    ).fetchall()
+    attrs_map = {}
+    for row in attr_rows:
+        attrs_map.setdefault(row["person_id"], []).append(dict(row))
+
+    # Tags
+    tag_rows = conn.execute(
+        f"SELECT person_id, tag FROM person_tags WHERE person_id IN ({placeholders}) ORDER BY person_id, tag",
+        person_ids,
+    ).fetchall()
+    tags_map = {}
+    for row in tag_rows:
+        tags_map.setdefault(row["person_id"], []).append(row["tag"])
+
+    for person in persons:
+        person["attributes"] = attrs_map.get(person["id"], [])
+        person["tags"] = tags_map.get(person["id"], [])
+
+    return persons
+
+
+## ── Entry commands ────────────────────────────────────────────────────
 
 
 def cmd_init():
@@ -97,55 +301,65 @@ def cmd_init():
     print(json.dumps({"status": "ok", "message": "Database initialized", "path": DB_PATH}))
 
 
+def _insert_entry(conn, data):
+    """Insert a single entry row and return its ID."""
+    cursor = conn.execute(
+        """INSERT INTO entries
+           (category, title, content, entry_date, start_time, end_time,
+            due_date, status, priority, parent_id, location, url,
+            recurrence, recurrence_until, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            data.get("category", "note"),
+            data["title"],
+            data.get("content", ""),
+            data.get("entry_date"),
+            data.get("start_time"),
+            data.get("end_time"),
+            data.get("due_date"),
+            data.get("status", "active"),
+            data.get("priority", "medium"),
+            data.get("parent_id"),
+            data.get("location", ""),
+            data.get("url", ""),
+            data.get("recurrence", ""),
+            data.get("recurrence_until"),
+            data.get("source", ""),
+        ),
+    )
+    entry_id = cursor.lastrowid
+
+    tags = _parse_tags(data.get("tags", ""))
+    _save_entry_tags(conn, entry_id, tags)
+
+    if "person_ids" in data:
+        _save_entry_persons(conn, entry_id, data["person_ids"])
+
+    return entry_id
+
+
 def cmd_store(data_json):
     """Store a single entry."""
     data = json.loads(data_json)
     conn = get_connection()
     ensure_schema(conn)
 
-    cursor = conn.execute(
-        """INSERT INTO entries (category, title, content, tags, entry_date, due_date, status, priority)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            data.get("category", "note"),
-            data["title"],
-            data.get("content", ""),
-            data.get("tags", ""),
-            data.get("entry_date"),
-            data.get("due_date"),
-            data.get("status", "active"),
-            data.get("priority", "medium"),
-        ),
-    )
+    entry_id = _insert_entry(conn, data)
+
     conn.commit()
-    entry_id = cursor.lastrowid
     conn.close()
     print(json.dumps({"status": "ok", "id": entry_id}))
 
 
 def cmd_store_batch(data_json):
     """Store multiple entries at once."""
-    entries = json.loads(data_json)
+    items = json.loads(data_json)
     conn = get_connection()
     ensure_schema(conn)
 
     ids = []
-    for data in entries:
-        cursor = conn.execute(
-            """INSERT INTO entries (category, title, content, tags, entry_date, due_date, status, priority)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                data.get("category", "note"),
-                data["title"],
-                data.get("content", ""),
-                data.get("tags", ""),
-                data.get("entry_date"),
-                data.get("due_date"),
-                data.get("status", "active"),
-                data.get("priority", "medium"),
-            ),
-        )
-        ids.append(cursor.lastrowid)
+    for data in items:
+        ids.append(_insert_entry(conn, data))
 
     conn.commit()
     conn.close()
@@ -162,53 +376,90 @@ def cmd_query(filter_json):
     params = []
 
     if "category" in filters:
-        where_clauses.append("category = ?")
+        where_clauses.append("e.category = ?")
         params.append(filters["category"])
     if "status" in filters:
-        where_clauses.append("status = ?")
+        where_clauses.append("e.status = ?")
         params.append(filters["status"])
     if "from_date" in filters:
-        where_clauses.append("(entry_date >= ? OR due_date >= ?)")
+        where_clauses.append("(e.entry_date >= ? OR e.due_date >= ?)")
         params.extend([filters["from_date"], filters["from_date"]])
     if "to_date" in filters:
-        where_clauses.append("(entry_date <= ? OR due_date <= ?)")
+        where_clauses.append("(e.entry_date <= ? OR e.due_date <= ?)")
         params.extend([filters["to_date"], filters["to_date"]])
     if "priority" in filters:
-        where_clauses.append("priority = ?")
+        where_clauses.append("e.priority = ?")
         params.append(filters["priority"])
     if "tags" in filters:
-        where_clauses.append("(',' || tags || ',' LIKE '%,' || ? || ',%')")
+        where_clauses.append(
+            "EXISTS (SELECT 1 FROM entry_tags et WHERE et.entry_id = e.id AND et.tag = ?)"
+        )
         params.append(filters["tags"])
+    if "person_id" in filters:
+        where_clauses.append(
+            "EXISTS (SELECT 1 FROM entry_persons ep WHERE ep.entry_id = e.id AND ep.person_id = ?)"
+        )
+        params.append(int(filters["person_id"]))
+    if "parent_id" in filters:
+        where_clauses.append("e.parent_id = ?")
+        params.append(int(filters["parent_id"]))
     if "id" in filters:
-        where_clauses.append("id = ?")
+        where_clauses.append("e.id = ?")
         params.append(int(filters["id"]))
 
     where = " AND ".join(where_clauses) if where_clauses else "1=1"
     limit = filters.get("limit", 50)
 
     rows = conn.execute(
-        f"SELECT * FROM entries WHERE {where} ORDER BY entry_date DESC, created_at DESC LIMIT ?",
+        f"""SELECT e.* FROM entries e
+            WHERE {where}
+            ORDER BY COALESCE(e.entry_date, '9999-12-31') DESC, e.created_at DESC
+            LIMIT ?""",
         params + [limit],
     ).fetchall()
 
     result = [dict(row) for row in rows]
+    _enrich_entries(conn, result)
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def _search_entries_like(conn, keyword):
+    """Search entries using LIKE (fallback for short queries or when FTS5 is unavailable)."""
+    pattern = f"%{keyword}%"
+    return conn.execute(
+        """SELECT * FROM entries
+           WHERE title LIKE ? OR content LIKE ?
+           ORDER BY COALESCE(entry_date, '9999-12-31') DESC, created_at DESC
+           LIMIT 50""",
+        (pattern, pattern),
+    ).fetchall()
+
+
 def cmd_search(keyword):
-    """Full-text search across title, content, and tags."""
+    """Full-text search across entries using FTS5, with LIKE fallback."""
     conn = get_connection()
     ensure_schema(conn)
 
-    rows = conn.execute(
-        """SELECT * FROM entries
-           WHERE title LIKE ? OR content LIKE ? OR tags LIKE ?
-           ORDER BY entry_date DESC, created_at DESC LIMIT 50""",
-        (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"),
-    ).fetchall()
+    rows = []
+    try:
+        rows = conn.execute(
+            """SELECT e.* FROM entries_fts fts
+               JOIN entries e ON e.id = fts.rowid
+               WHERE entries_fts MATCH ?
+               ORDER BY rank
+               LIMIT 50""",
+            (keyword,),
+        ).fetchall()
+    except Exception:
+        pass
+
+    # Fall back to LIKE if FTS returned nothing (e.g. query shorter than 3 chars for trigram)
+    if not rows:
+        rows = _search_entries_like(conn, keyword)
 
     result = [dict(row) for row in rows]
+    _enrich_entries(conn, result)
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -223,25 +474,48 @@ def cmd_update(entry_id, update_json):
     params = []
 
     allowed_fields = [
-        "category", "title", "content", "tags",
-        "entry_date", "due_date", "status", "priority",
+        "category", "title", "content",
+        "entry_date", "start_time", "end_time",
+        "due_date", "status", "priority",
+        "parent_id", "location", "url",
+        "recurrence", "recurrence_until", "source",
     ]
     for field in allowed_fields:
         if field in updates:
             set_clauses.append(f"{field} = ?")
             params.append(updates[field])
 
-    if not set_clauses:
+    # Auto-set completed_at when status changes to completed
+    if updates.get("status") == "completed":
+        set_clauses.append("completed_at = datetime('now', 'localtime')")
+    elif updates.get("status") in ("active", "on_hold"):
+        set_clauses.append("completed_at = NULL")
+
+    has_field_updates = bool(set_clauses)
+    has_tags = "tags" in updates
+    has_persons = "person_ids" in updates
+
+    if not has_field_updates and not has_tags and not has_persons:
         print(json.dumps({"status": "error", "message": "No valid fields to update"}))
         return
 
-    set_clauses.append("updated_at = datetime('now', 'localtime')")
-    params.append(int(entry_id))
+    if has_field_updates:
+        set_clauses.append("updated_at = datetime('now', 'localtime')")
+        params.append(int(entry_id))
+        conn.execute(
+            f"UPDATE entries SET {', '.join(set_clauses)} WHERE id = ?",
+            params,
+        )
 
-    conn.execute(
-        f"UPDATE entries SET {', '.join(set_clauses)} WHERE id = ?",
-        params,
-    )
+    if has_tags:
+        conn.execute("DELETE FROM entry_tags WHERE entry_id = ?", (int(entry_id),))
+        tags = _parse_tags(updates["tags"])
+        _save_entry_tags(conn, int(entry_id), tags)
+
+    if has_persons:
+        conn.execute("DELETE FROM entry_persons WHERE entry_id = ?", (int(entry_id),))
+        _save_entry_persons(conn, int(entry_id), updates["person_ids"])
+
     conn.commit()
     conn.close()
     print(json.dumps({"status": "ok", "id": int(entry_id)}))
@@ -293,9 +567,11 @@ def cmd_summary(period_json):
     rows = conn.execute(
         """SELECT * FROM entries
            WHERE (entry_date BETWEEN ? AND ?) OR (due_date BETWEEN ? AND ?)
-           ORDER BY category, entry_date, priority DESC""",
+           ORDER BY category, COALESCE(entry_date, '9999-12-31'), priority DESC""",
         (from_date, to_date, from_date, to_date),
     ).fetchall()
+    entries = [dict(row) for row in rows]
+    _enrich_entries(conn, entries)
 
     # Get counts by category
     counts = conn.execute(
@@ -306,36 +582,42 @@ def cmd_summary(period_json):
     ).fetchall()
 
     # Get overdue items
-    overdue = conn.execute(
+    overdue_rows = conn.execute(
         """SELECT * FROM entries
            WHERE due_date < ? AND status = 'active'
            ORDER BY due_date, priority DESC""",
         (today,),
     ).fetchall()
+    overdue = [dict(row) for row in overdue_rows]
+    _enrich_entries(conn, overdue)
 
     # Get upcoming deadlines (next 7 days)
     upcoming_end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-    upcoming = conn.execute(
+    upcoming_rows = conn.execute(
         """SELECT * FROM entries
            WHERE due_date BETWEEN ? AND ? AND status = 'active'
            ORDER BY due_date, priority DESC""",
         (today, upcoming_end),
     ).fetchall()
+    upcoming = [dict(row) for row in upcoming_rows]
+    _enrich_entries(conn, upcoming)
 
     # Get active goals
-    goals = conn.execute(
+    goal_rows = conn.execute(
         """SELECT * FROM entries
            WHERE category = 'goal' AND status = 'active'
            ORDER BY priority DESC, created_at DESC""",
     ).fetchall()
+    goals = [dict(row) for row in goal_rows]
+    _enrich_entries(conn, goals)
 
     result = {
         "period": {"from": from_date, "to": to_date, "type": period_type},
-        "entries": [dict(row) for row in rows],
+        "entries": entries,
         "counts": {row["category"]: row["count"] for row in counts},
-        "overdue": [dict(row) for row in overdue],
-        "upcoming_deadlines": [dict(row) for row in upcoming],
-        "active_goals": [dict(row) for row in goals],
+        "overdue": overdue,
+        "upcoming_deadlines": upcoming,
+        "active_goals": goals,
     }
 
     conn.close()
@@ -347,14 +629,69 @@ def cmd_list():
     conn = get_connection()
     ensure_schema(conn)
     rows = conn.execute(
-        "SELECT * FROM entries WHERE status = 'active' ORDER BY entry_date DESC, created_at DESC LIMIT 100"
+        """SELECT * FROM entries WHERE status = 'active'
+           ORDER BY COALESCE(entry_date, '9999-12-31') DESC, created_at DESC LIMIT 100"""
     ).fetchall()
     result = [dict(row) for row in rows]
+    _enrich_entries(conn, result)
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-## ── Person (profile) commands ──────────────────────────────────────────
+## ── Entry-Person link commands ────────────────────────────────────────
+
+
+def cmd_entry_link(entry_id, data_json):
+    """Link one or more persons to an entry."""
+    data = json.loads(data_json)
+    conn = get_connection()
+    ensure_schema(conn)
+
+    items = data if isinstance(data, list) else [data]
+    for item in items:
+        conn.execute(
+            """INSERT OR REPLACE INTO entry_persons (entry_id, person_id, role)
+               VALUES (?, ?, ?)""",
+            (int(entry_id), int(item["person_id"]), item.get("role", "")),
+        )
+
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "entry_id": int(entry_id)}))
+
+
+def cmd_entry_unlink(entry_id, person_id):
+    """Unlink a person from an entry."""
+    conn = get_connection()
+    ensure_schema(conn)
+    conn.execute(
+        "DELETE FROM entry_persons WHERE entry_id = ? AND person_id = ?",
+        (int(entry_id), int(person_id)),
+    )
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "entry_id": int(entry_id), "person_id": int(person_id)}))
+
+
+def cmd_person_entries(person_id):
+    """List entries linked to a person."""
+    conn = get_connection()
+    ensure_schema(conn)
+    rows = conn.execute(
+        """SELECT e.*, ep.role as link_role FROM entries e
+           JOIN entry_persons ep ON e.id = ep.entry_id
+           WHERE ep.person_id = ?
+           ORDER BY COALESCE(e.entry_date, '9999-12-31') DESC, e.created_at DESC
+           LIMIT 100""",
+        (int(person_id),),
+    ).fetchall()
+    result = [dict(row) for row in rows]
+    _enrich_entries(conn, result)
+    conn.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+## ── Person commands ───────────────────────────────────────────────────
 
 
 def cmd_person_add(data_json):
@@ -364,8 +701,8 @@ def cmd_person_add(data_json):
     ensure_schema(conn)
 
     cursor = conn.execute(
-        """INSERT INTO persons (person_type, name, relationship, organization, role, birthday, email, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO persons (person_type, name, relationship, organization, role, birthday, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             data.get("person_type", "contact"),
             data["name"],
@@ -373,19 +710,34 @@ def cmd_person_add(data_json):
             data.get("organization", ""),
             data.get("role", ""),
             data.get("birthday"),
-            data.get("email", ""),
             data.get("notes", ""),
         ),
     )
     person_id = cursor.lastrowid
 
-    # Optionally store attributes inline
+    # Handle email as a contact attribute for backward compatibility
+    if data.get("email"):
+        conn.execute(
+            """INSERT OR REPLACE INTO person_attributes (person_id, category, key, value)
+               VALUES (?, 'contact', 'email', ?)""",
+            (person_id, data["email"]),
+        )
+
+    # Store inline attributes
     attrs = data.get("attributes", [])
     for attr in attrs:
         conn.execute(
             """INSERT OR REPLACE INTO person_attributes (person_id, category, key, value)
                VALUES (?, ?, ?, ?)""",
             (person_id, attr["category"], attr["key"], attr["value"]),
+        )
+
+    # Store inline tags
+    tags = _parse_tags(data.get("tags", ""))
+    for tag in tags:
+        conn.execute(
+            "INSERT OR IGNORE INTO person_tags (person_id, tag) VALUES (?, ?)",
+            (person_id, tag),
         )
 
     conn.commit()
@@ -399,7 +751,10 @@ def cmd_person_update(person_id, update_json):
     conn = get_connection()
     ensure_schema(conn)
 
-    allowed = ["person_type", "name", "relationship", "organization", "role", "birthday", "email", "notes"]
+    allowed = [
+        "person_type", "name", "relationship", "organization",
+        "role", "birthday", "notes", "last_contacted_at",
+    ]
     set_clauses = []
     params = []
     for field in allowed:
@@ -421,10 +776,9 @@ def cmd_person_update(person_id, update_json):
 
 
 def cmd_person_delete(person_id):
-    """Delete a person and their attributes."""
+    """Delete a person (cascades to attributes, tags, and entry links)."""
     conn = get_connection()
     ensure_schema(conn)
-    conn.execute("DELETE FROM person_attributes WHERE person_id = ?", (int(person_id),))
     conn.execute("DELETE FROM persons WHERE id = ?", (int(person_id),))
     conn.commit()
     conn.close()
@@ -432,7 +786,7 @@ def cmd_person_delete(person_id):
 
 
 def cmd_person_get(person_id):
-    """Get a person with all their attributes."""
+    """Get a person with all their attributes and tags."""
     conn = get_connection()
     ensure_schema(conn)
 
@@ -443,18 +797,14 @@ def cmd_person_get(person_id):
         return
 
     person = dict(row)
-    attrs = conn.execute(
-        "SELECT * FROM person_attributes WHERE person_id = ? ORDER BY category, key",
-        (int(person_id),),
-    ).fetchall()
-    person["attributes"] = [dict(a) for a in attrs]
+    _enrich_persons(conn, [person])
 
     conn.close()
     print(json.dumps(person, ensure_ascii=False, indent=2))
 
 
 def cmd_person_list(filter_json=None):
-    """List persons, optionally filtered by person_type."""
+    """List persons, optionally filtered."""
     filters = json.loads(filter_json) if filter_json else {}
     conn = get_connection()
     ensure_schema(conn)
@@ -462,44 +812,39 @@ def cmd_person_list(filter_json=None):
     where_clauses = []
     params = []
     if "person_type" in filters:
-        where_clauses.append("person_type = ?")
+        where_clauses.append("p.person_type = ?")
         params.append(filters["person_type"])
     if "name" in filters:
-        where_clauses.append("name LIKE ?")
+        where_clauses.append("p.name LIKE ?")
         params.append(f"%{filters['name']}%")
     if "relationship" in filters:
-        where_clauses.append("relationship LIKE ?")
+        where_clauses.append("p.relationship LIKE ?")
         params.append(f"%{filters['relationship']}%")
     if "organization" in filters:
-        where_clauses.append("organization LIKE ?")
+        where_clauses.append("p.organization LIKE ?")
         params.append(f"%{filters['organization']}%")
+    if "tag" in filters:
+        where_clauses.append(
+            "EXISTS (SELECT 1 FROM person_tags pt WHERE pt.person_id = p.id AND pt.tag = ?)"
+        )
+        params.append(filters["tag"])
 
     where = " AND ".join(where_clauses) if where_clauses else "1=1"
     rows = conn.execute(
-        f"SELECT * FROM persons WHERE {where} ORDER BY person_type, name", params
+        f"SELECT p.* FROM persons p WHERE {where} ORDER BY p.person_type, p.name", params
     ).fetchall()
 
-    result = []
-    for row in rows:
-        person = dict(row)
-        attrs = conn.execute(
-            "SELECT * FROM person_attributes WHERE person_id = ? ORDER BY category, key",
-            (person["id"],),
-        ).fetchall()
-        person["attributes"] = [dict(a) for a in attrs]
-        result.append(person)
+    result = [dict(row) for row in rows]
+    _enrich_persons(conn, result)
 
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def cmd_person_search(keyword):
-    """Search persons by keyword across name, relationship, organization, role, notes, and attributes."""
-    conn = get_connection()
-    ensure_schema(conn)
-
+def _search_persons_like(conn, keyword):
+    """Search persons using LIKE (fallback)."""
     pattern = f"%{keyword}%"
-    rows = conn.execute(
+    return conn.execute(
         """SELECT DISTINCT p.* FROM persons p
            LEFT JOIN person_attributes pa ON p.id = pa.person_id
            WHERE p.name LIKE ? OR p.relationship LIKE ? OR p.organization LIKE ?
@@ -509,21 +854,65 @@ def cmd_person_search(keyword):
         (pattern, pattern, pattern, pattern, pattern, pattern, pattern),
     ).fetchall()
 
-    result = []
-    for row in rows:
-        person = dict(row)
-        attrs = conn.execute(
-            "SELECT * FROM person_attributes WHERE person_id = ? ORDER BY category, key",
-            (person["id"],),
+
+def cmd_person_search(keyword):
+    """Search persons by keyword using FTS5, with LIKE fallback."""
+    conn = get_connection()
+    ensure_schema(conn)
+
+    rows = []
+    try:
+        rows = conn.execute(
+            """SELECT p.* FROM persons_fts fts
+               JOIN persons p ON p.id = fts.rowid
+               WHERE persons_fts MATCH ?
+               ORDER BY rank""",
+            (keyword,),
         ).fetchall()
-        person["attributes"] = [dict(a) for a in attrs]
-        result.append(person)
+    except Exception:
+        pass
+
+    # Fall back to LIKE if FTS returned nothing
+    if not rows:
+        rows = _search_persons_like(conn, keyword)
+
+    result = [dict(row) for row in rows]
+    _enrich_persons(conn, result)
 
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-## ── Person attribute commands ──────────────────────────────────────────
+## ── Person tag commands ───────────────────────────────────────────────
+
+
+def cmd_person_tag_add(person_id, tag):
+    """Add a tag to a person."""
+    conn = get_connection()
+    ensure_schema(conn)
+    conn.execute(
+        "INSERT OR IGNORE INTO person_tags (person_id, tag) VALUES (?, ?)",
+        (int(person_id), tag.strip()),
+    )
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "person_id": int(person_id), "tag": tag.strip()}))
+
+
+def cmd_person_tag_remove(person_id, tag):
+    """Remove a tag from a person."""
+    conn = get_connection()
+    ensure_schema(conn)
+    conn.execute(
+        "DELETE FROM person_tags WHERE person_id = ? AND tag = ?",
+        (int(person_id), tag.strip()),
+    )
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "person_id": int(person_id), "tag": tag.strip()}))
+
+
+## ── Person attribute commands ─────────────────────────────────────────
 
 
 def cmd_attr_set(person_id, data_json):
@@ -584,12 +973,17 @@ def cmd_attr_list(person_id, category=None):
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+## ── Main ──────────────────────────────────────────────────────────────
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: secretary.py <command> [args...]")
         print("Commands: init, store, store_batch, query, search, update, delete, summary, list,")
+        print("         entry_link, entry_unlink, person_entries,")
         print("         person_add, person_update, person_delete, person_get, person_list,")
-        print("         person_search, attr_set, attr_delete, attr_list")
+        print("         person_search, person_tag_add, person_tag_remove,")
+        print("         attr_set, attr_delete, attr_list")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -613,6 +1007,13 @@ def main():
             cmd_summary(sys.argv[2] if len(sys.argv) > 2 else '{"type": "today"}')
         elif command == "list":
             cmd_list()
+        # Entry-person link commands
+        elif command == "entry_link":
+            cmd_entry_link(sys.argv[2], sys.argv[3])
+        elif command == "entry_unlink":
+            cmd_entry_unlink(sys.argv[2], sys.argv[3])
+        elif command == "person_entries":
+            cmd_person_entries(sys.argv[2])
         # Person commands
         elif command == "person_add":
             cmd_person_add(sys.argv[2])
@@ -626,6 +1027,11 @@ def main():
             cmd_person_list(sys.argv[2] if len(sys.argv) > 2 else None)
         elif command == "person_search":
             cmd_person_search(sys.argv[2])
+        # Person tag commands
+        elif command == "person_tag_add":
+            cmd_person_tag_add(sys.argv[2], sys.argv[3])
+        elif command == "person_tag_remove":
+            cmd_person_tag_remove(sys.argv[2], sys.argv[3])
         # Attribute commands
         elif command == "attr_set":
             cmd_attr_set(sys.argv[2], sys.argv[3])
