@@ -2,7 +2,6 @@
 
 import os
 import sqlite3
-import json
 
 DB_DIR = os.path.expanduser("~/.secretary")
 DB_PATH = os.path.join(DB_DIR, "data.db")
