@@ -168,3 +168,131 @@ SQLiteのFTS5はtrigramトークナイザーを使用しており、日本語検
 - データ量が小さいため、パフォーマンスの懸念は低い
 
 **避けるべき**: MongoDB 等のサーバー型 NoSQL は個人用ツールにはオーバースペック。
+
+---
+
+## 補足: TinyDB 移行時の FTS 代替調査
+
+現在の SQLite FTS5 は `tokenize='trigram'` を使用しており、日本語テキストを3文字ずつの
+部分文字列に分割してインデックスする方式。TinyDB に移行する場合の FTS 代替選択肢を調査した。
+
+### TinyDB の組み込み検索機能
+
+TinyDB には FTS 機能が**存在しない**。専用プラグインも見つからない。
+組み込みで使えるのは以下のみ：
+
+- `Query().field.search('regex')` — 正規表現マッチ
+- `Query().field.test(callable)` — カスタム関数によるフィルタ
+
+これらはインデックスを使わない全走査であり、FTS5 の代替にはならない。
+
+### 選択肢 1: Whoosh / Whoosh-Reloaded（Pure Python FTS）
+
+| 項目 | 内容 |
+|------|------|
+| インストール | `pip install whoosh-reloaded` |
+| 日本語対応 | N-gram トークナイザーで対応可能（真の形態素解析ではない） |
+| Pure Python | Yes（外部バイナリ不要） |
+| メンテナンス | **ほぼ停止** — オリジナル Whoosh は開発終了、Whoosh-Reloaded も過去12ヶ月リリースなし |
+| ファイルベース | Yes（インデックスディレクトリを生成） |
+
+**問題点**: メンテナンスが実質停止しているライブラリに依存するリスクがある。
+
+### 選択肢 2: tantivy-py（Rust ベース FTS）
+
+| 項目 | 内容 |
+|------|------|
+| インストール | `pip install tantivy` |
+| 日本語対応 | Rust 側では lindera/Vaporetto で対応可能だが、**Python バインディングからは日本語トークナイザーが使えない**（default トークナイザーのみ公開） |
+| Pure Python | No（Rust バイナリ） |
+| メンテナンス | 活発（quickwit-oss が管理） |
+| パフォーマンス | Lucene の約2倍 |
+
+**問題点**: 日本語トークナイザーを Python から使うには、カスタム Rust バインディングのビルドが必要。オーバースペック。
+
+### 選択肢 3: 自前 trigram インデックス（Pure Python、依存なし）
+
+現在の FTS5 が `tokenize='trigram'` を使っていることを踏まえると、同じロジックを
+Pure Python で実装するのが最もシンプルな代替。
+
+```python
+# 概念実装（~50行で実現可能）
+class TrigramIndex:
+    def __init__(self):
+        self.index = {}  # trigram -> set of doc_ids
+
+    def _trigrams(self, text):
+        """テキストから全3文字部分文字列を抽出"""
+        text = text.lower()
+        return {text[i:i+3] for i in range(len(text) - 2)}
+
+    def add(self, doc_id, text):
+        for tri in self._trigrams(text):
+            self.index.setdefault(tri, set()).add(doc_id)
+
+    def search(self, query, documents):
+        """候補をtrigramで絞り込み、部分文字列マッチで検証"""
+        trigrams = self._trigrams(query)
+        if not trigrams:
+            return []
+        # 全trigramを含むドキュメントを候補に
+        candidates = set.intersection(*(self.index.get(t, set()) for t in trigrams))
+        # 実際の部分文字列マッチで検証（false positive 除去）
+        query_lower = query.lower()
+        return [doc_id for doc_id in candidates
+                if query_lower in documents[doc_id].lower()]
+```
+
+日本語での動作例：
+```python
+idx = TrigramIndex()
+idx.add(1, "チームミーティング")
+# → trigrams: {"チーム", "ームミ", "ムミー", "ミーテ", "ーティ", "ティン", "ィング"}
+
+idx.search("ミーティング", docs)
+# → trigrams {"ミーテ","ーティ","ティン","ィング"} で候補を絞り込み → [1]
+```
+
+| 項目 | 内容 |
+|------|------|
+| インストール | 不要（標準ライブラリのみ） |
+| 日本語対応 | Python の Unicode 処理でそのまま動作 |
+| Pure Python | Yes |
+| メンテナンス | 自前コードなので自分で管理 |
+| パフォーマンス | 数千件なら問題なし。メモリ上にインデックス保持（永続化は JSON で可能） |
+| 実装コスト | ~50行 |
+
+**利点**: 現在の FTS5 trigram と同じアルゴリズムなので、検索品質が同等。
+**欠点**: ランキング（BM25等）が無い（ただし現在の使用パターンでは不要）。インデックスの永続化を自前で管理する必要がある。
+
+### 選択肢 4: SQLite FTS5 を検索専用に併用
+
+TinyDB をメインストレージにしつつ、検索用途だけ SQLite FTS5 を使うハイブリッド構成。
+
+| 項目 | 内容 |
+|------|------|
+| メインストレージ | TinyDB（ドキュメント指向） |
+| 検索インデックス | SQLite FTS5（trigram、現在と同じ） |
+| 同期 | アイテムの追加/更新/削除時に FTS テーブルも更新 |
+
+**利点**: FTS5 の検索品質をそのまま維持。TinyDB のドキュメント指向の利点も得られる。
+**欠点**: 2つのストレージを同期する複雑さ。「SQLite をやめたい」という動機と矛盾。
+
+### FTS 代替の比較まとめ
+
+| 選択肢 | 日本語 | 依存 | メンテ | 実装コスト | 検索品質 |
+|--------|--------|------|--------|-----------|----------|
+| Whoosh-Reloaded | N-gram で対応 | 外部1個 | 停滞 | 低 | 高（ランキング有） |
+| tantivy-py | 困難 | 外部1個+Rust | 活発 | 高 | 最高 |
+| 自前 trigram | そのまま動作 | なし | 自前 | 低（~50行） | 中（ランキング無） |
+| SQLite FTS5 併用 | そのまま動作 | なし | 安定 | 中 | 高 |
+
+### FTS 観点での結論
+
+**TinyDB に移行する場合の最も現実的な FTS 代替は「自前 trigram インデックス」**。
+現在の FTS5 trigram と同じアルゴリズムを ~50行で実装でき、外部依存も不要。
+データ量が数千件の個人ツールでは十分な性能。
+
+ただし、**FTS5 が SQLite に留まる最大の理由の一つ**であることも事実。
+FTS5 trigram は安定しており、インデックスの永続化・更新・同期を自動で行ってくれる。
+自前実装ではこれらを手動で管理する必要がある。
