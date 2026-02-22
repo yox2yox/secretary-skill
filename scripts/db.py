@@ -43,6 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag ON collection_item_tags(
 
 CREATE TABLE IF NOT EXISTS tag_schemas (
     tag TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'tag' CHECK(kind IN ('tag', 'type')),
     display_name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     fields_schema TEXT NOT NULL DEFAULT '[]',
@@ -173,9 +174,17 @@ def get_connection():
     return conn
 
 
+def _migrate_tag_schemas_kind(conn):
+    """Add 'kind' column to tag_schemas if it doesn't exist (migration)."""
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(tag_schemas)").fetchall()]
+    if "kind" not in cols:
+        conn.execute("ALTER TABLE tag_schemas ADD COLUMN kind TEXT NOT NULL DEFAULT 'tag' CHECK(kind IN ('tag', 'type'))")
+
+
 def ensure_schema(conn):
     """Ensure the database schema exists."""
     conn.executescript(SCHEMA_SQL)
+    _migrate_tag_schemas_kind(conn)
     try:
         conn.executescript(FTS_SQL)
     except Exception:

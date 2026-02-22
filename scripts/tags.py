@@ -41,11 +41,13 @@ def cmd_tags_list():
     for tag, data in tag_data.items():
         if tag in schemas:
             data["has_schema"] = True
+            data["kind"] = schemas[tag].get("kind", "tag")
             data["display_name"] = schemas[tag]["display_name"]
             data["description"] = schemas[tag]["description"]
             data["fields_schema"] = schemas[tag]["fields_schema"]
         else:
             data["has_schema"] = False
+            data["kind"] = "tag"
 
     result = sorted(tag_data.values(), key=lambda x: (-x["count"], x["tag"]))
 
@@ -60,20 +62,28 @@ def cmd_tag_schema_set(data_json):
     ensure_schema(conn)
 
     tag = data["tag"]
+    kind = data.get("kind", "tag")
+    if kind not in ("tag", "type"):
+        conn.close()
+        print(json.dumps({"status": "error", "message": "kind must be 'tag' or 'type'"}))
+        return
+
     fields_schema = data.get("fields_schema", [])
     if isinstance(fields_schema, list):
         fields_schema = json.dumps(fields_schema, ensure_ascii=False)
 
     conn.execute(
-        """INSERT INTO tag_schemas (tag, display_name, description, fields_schema)
-           VALUES (?, ?, ?, ?)
+        """INSERT INTO tag_schemas (tag, kind, display_name, description, fields_schema)
+           VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(tag)
-           DO UPDATE SET display_name = excluded.display_name,
+           DO UPDATE SET kind = excluded.kind,
+                         display_name = excluded.display_name,
                          description = excluded.description,
                          fields_schema = excluded.fields_schema,
                          updated_at = datetime('now', 'localtime')""",
         (
             tag,
+            kind,
             data.get("display_name", ""),
             data.get("description", ""),
             fields_schema,
@@ -81,7 +91,7 @@ def cmd_tag_schema_set(data_json):
     )
     conn.commit()
     conn.close()
-    print(json.dumps({"status": "ok", "tag": tag}))
+    print(json.dumps({"status": "ok", "tag": tag, "kind": kind}))
 
 
 def cmd_tag_schema_get(tag):

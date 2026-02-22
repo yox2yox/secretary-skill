@@ -267,18 +267,40 @@ python3 SCRIPT item_list <col_id> '{"parent_id": null}'
 
 ## タグ管理
 
-タグはすべてのアイテム間で共有されます。各タグには期待されるデータフィールドを
-定義する**スキーマ**を持たせることができます。
+タグはすべてのアイテム間で共有されます。タグには2つの種別（`kind`）があります：
+
+| kind   | 説明 | 選択数 |
+|--------|------|--------|
+| `tag`  | 分類・ラベル用の通常タグ | 複数可 |
+| `type` | データスキーマを決定するタイプタグ | **1アイテムにつき1つのみ** |
+
+`type`タグは`fields_schema`を持ち、そのアイテムの`data`フィールドに期待される
+構造を定義します。1つのアイテムに複数の`type`タグを付けることはできません。
+通常の`tag`は従来どおり複数付けることができます。
+
+アイテム取得時、`type`タグは`"type"`フィールドとして返され、通常のタグは
+`"tags"`配列として返されます。
 
 **全タグを一覧表示：**
 ```bash
 python3 SCRIPT tags_list
 ```
 
-**タグスキーマを定義する：**
+**タグスキーマを定義する（通常タグ）：**
+```bash
+python3 SCRIPT tag_schema_set '{
+  "tag": "urgent",
+  "kind": "tag",
+  "display_name": "緊急",
+  "description": "緊急度の高いアイテム"
+}'
+```
+
+**タイプタグスキーマを定義する（type）：**
 ```bash
 python3 SCRIPT tag_schema_set '{
   "tag": "project",
+  "kind": "type",
   "display_name": "プロジェクト",
   "description": "社内プロジェクトに関するデータ",
   "fields_schema": [
@@ -302,6 +324,7 @@ python3 SCRIPT tag_schema_delete <tag>
 2. 複数語のタグにはハイフン区切りの小文字を使用：`project-alpha`、`team-lead`
 3. 技術的・汎用的な用語には英語を推奨：`frontend`、`backend`、`meeting`
 4. 日本固有の概念には日本語も可：`経理`、`総務`
+5. データスキーマを決定するタグは `kind: "type"` で定義してください
 
 ## レスポンスガイドライン
 
