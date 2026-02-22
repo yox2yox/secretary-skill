@@ -1,8 +1,8 @@
-"""Collection commands, collection item commands, and item relation commands."""
+"""Collection commands and collection item commands."""
 
 import json
 
-from db import get_connection, ensure_schema, parse_tags
+from db import get_connection, ensure_schema, parse_tags, DB_PATH
 
 
 def _save_item_tags(conn, item_id, tags):
@@ -15,7 +15,7 @@ def _save_item_tags(conn, item_id, tags):
 
 
 def _enrich_items(conn, items):
-    """Add tags and relations to item dicts (batch)."""
+    """Add tags to item dicts (batch)."""
     if not items:
         return items
 
@@ -38,24 +38,8 @@ def _enrich_items(conn, items):
     for row in tag_rows:
         tags_map.setdefault(row["item_id"], []).append(row["tag"])
 
-    # Relations
-    rel_rows = conn.execute(
-        f"""SELECT r.*, ci.title as related_item_title, e.title as related_entry_title, p.name as related_person_name
-            FROM collection_item_relations r
-            LEFT JOIN collection_items ci ON r.related_item_id = ci.id
-            LEFT JOIN entries e ON r.related_entry_id = e.id
-            LEFT JOIN persons p ON r.related_person_id = p.id
-            WHERE r.item_id IN ({placeholders})
-            ORDER BY r.item_id""",
-        item_ids,
-    ).fetchall()
-    rels_map = {}
-    for row in rel_rows:
-        rels_map.setdefault(row["item_id"], []).append(dict(row))
-
     for item in items:
         item["tags"] = tags_map.get(item["id"], [])
-        item["relations"] = rels_map.get(item["id"], [])
 
     return items
 
@@ -86,7 +70,18 @@ def _insert_item(conn, collection_id, data):
     return item_id
 
 
-## ── Collection commands ──────────────────────────────────────────────
+## -- Database initialization ------------------------------------------------
+
+
+def cmd_init():
+    """Initialize the database."""
+    conn = get_connection()
+    ensure_schema(conn)
+    conn.close()
+    print(json.dumps({"status": "ok", "message": "Database initialized", "path": DB_PATH}))
+
+
+## -- Collection commands ----------------------------------------------------
 
 
 def cmd_col_create(data_json):
@@ -211,7 +206,7 @@ def cmd_col_delete(col_id):
     print(json.dumps({"status": "ok", "id": int(col_id)}))
 
 
-## ── Collection item commands ─────────────────────────────────────────
+## -- Collection item commands -----------------------------------------------
 
 
 def cmd_item_add(collection_id, data_json):
@@ -374,7 +369,7 @@ def cmd_item_list(collection_id, filter_json=None):
     rows = conn.execute(
         f"""SELECT ci.* FROM collection_items ci
             WHERE {where}
-            ORDER BY ci.title
+            ORDER BY ci.created_at DESC
             LIMIT ?""",
         params + [limit],
     ).fetchall()
@@ -394,14 +389,14 @@ def _search_items_like(conn, keyword, collection_id=None):
             """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name
                FROM collection_items ci JOIN collections c ON ci.collection_id = c.id
                WHERE ci.collection_id = ? AND (ci.title LIKE ? OR ci.content LIKE ? OR ci.data LIKE ?)
-               ORDER BY ci.title LIMIT 50""",
+               ORDER BY ci.created_at DESC LIMIT 50""",
             (int(collection_id), pattern, pattern, pattern),
         ).fetchall()
     return conn.execute(
         """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name
            FROM collection_items ci JOIN collections c ON ci.collection_id = c.id
            WHERE ci.title LIKE ? OR ci.content LIKE ? OR ci.data LIKE ?
-           ORDER BY ci.title LIMIT 50""",
+           ORDER BY ci.created_at DESC LIMIT 50""",
         (pattern, pattern, pattern),
     ).fetchall()
 
@@ -444,40 +439,3 @@ def cmd_item_search(keyword, collection_id=None):
 
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
-
-
-## ── Collection item relation commands ────────────────────────────────
-
-
-def cmd_item_relate(data_json):
-    """Create a relation from a collection item to another item, entry, or person."""
-    data = json.loads(data_json)
-    conn = get_connection()
-    ensure_schema(conn)
-
-    cursor = conn.execute(
-        """INSERT INTO collection_item_relations
-           (item_id, related_item_id, related_entry_id, related_person_id, relation_type)
-           VALUES (?, ?, ?, ?, ?)""",
-        (
-            int(data["item_id"]),
-            data.get("related_item_id"),
-            data.get("related_entry_id"),
-            data.get("related_person_id"),
-            data["relation_type"],
-        ),
-    )
-    rel_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    print(json.dumps({"status": "ok", "id": rel_id}))
-
-
-def cmd_item_unrelate(relation_id):
-    """Remove a relation."""
-    conn = get_connection()
-    ensure_schema(conn)
-    conn.execute("DELETE FROM collection_item_relations WHERE id = ?", (int(relation_id),))
-    conn.commit()
-    conn.close()
-    print(json.dumps({"status": "ok", "id": int(relation_id)}))
