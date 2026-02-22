@@ -5,10 +5,13 @@ description: >
   decisions, and notes in a structured SQLite database. Also manages profiles of
   the user (owner) and people around them — personality, preferences, thinking
   patterns, relationships, and more. Entries can be linked to persons for
-  structured "who" tracking. Use this skill when the user reports daily
-  activities, logs events, sets goals, plans future tasks, asks questions about
-  their stored information, or manages personal/contact profiles. Also triggers
-  when the user asks for summaries, schedules, or status of their goals and plans.
+  structured "who" tracking. Supports dynamic "collections" for any structured
+  data — org charts, projects, products, or custom domain knowledge. Use this
+  skill when the user reports daily activities, logs events, sets goals, plans
+  future tasks, asks questions about their stored information, manages
+  personal/contact profiles, or wants to store/query structured domain data.
+  Also triggers when the user asks for summaries, schedules, or status of their
+  goals and plans.
 allowed-tools: Bash
 ---
 
@@ -265,6 +268,130 @@ python3 SCRIPT person_delete <person_id>
 python3 SCRIPT attr_list <person_id>
 python3 SCRIPT attr_list <person_id> contact
 ```
+
+### 7. Managing dynamic collections
+
+Collections allow storing any kind of structured data beyond entries and persons.
+Use collections for organizational knowledge like company org charts, project lists,
+product catalogs, or any domain-specific data the user needs to track.
+
+**Create a collection:**
+```bash
+python3 SCRIPT col_create '{
+  "name": "org_chart",
+  "display_name": "組織図",
+  "description": "会社の組織構造",
+  "fields_schema": [
+    {"name": "department", "type": "string", "description": "部署名"},
+    {"name": "head_count", "type": "number", "description": "人数"},
+    {"name": "level", "type": "string", "description": "階層レベル"}
+  ]
+}'
+```
+
+The `fields_schema` is a JSON array of field definitions that serves as a hint for
+what data to store in each item's `data` field. It is not strictly enforced — items
+can store any JSON in their `data` field.
+
+**List all collections:**
+```bash
+python3 SCRIPT col_list
+```
+
+**Get collection details:**
+```bash
+python3 SCRIPT col_get <collection_id>
+```
+
+**Update a collection:**
+```bash
+python3 SCRIPT col_update <collection_id> '{"display_name": "Company Org Chart", "description": "Updated description"}'
+```
+
+**Delete a collection (cascades to all items):**
+```bash
+python3 SCRIPT col_delete <collection_id>
+```
+
+**Add items to a collection:**
+```bash
+python3 SCRIPT item_add <collection_id> '{
+  "title": "エンジニアリング部",
+  "content": "プロダクト開発を担当する部署",
+  "data": {"department": "Engineering", "head_count": 45, "level": "department"},
+  "tags": "engineering,tech"
+}'
+```
+
+Items support hierarchy via `parent_id` — useful for org charts, nested categories, etc.:
+```bash
+python3 SCRIPT item_add <collection_id> '{
+  "title": "フロントエンドチーム",
+  "content": "Web UIの開発",
+  "data": {"head_count": 12, "level": "team", "tech_stack": ["React", "TypeScript"]},
+  "parent_id": 1,
+  "tags": "frontend,engineering"
+}'
+```
+
+**Add multiple items at once:**
+```bash
+python3 SCRIPT item_add_batch <collection_id> '[
+  {"title": "プロジェクトA", "data": {"status": "進行中", "deadline": "2025-06-30"}},
+  {"title": "プロジェクトB", "data": {"status": "計画中", "deadline": "2025-09-30"}}
+]'
+```
+
+**Get item details (includes children and relations):**
+```bash
+python3 SCRIPT item_get <item_id>
+```
+
+**Update an item (data fields are merged with existing data):**
+```bash
+python3 SCRIPT item_update <item_id> '{"data": {"head_count": 50}, "tags": "engineering,tech,growing"}'
+```
+
+**List items in a collection (with optional filters):**
+```bash
+python3 SCRIPT item_list <collection_id>
+python3 SCRIPT item_list <collection_id> '{"status": "active"}'
+python3 SCRIPT item_list <collection_id> '{"parent_id": null}'
+python3 SCRIPT item_list <collection_id> '{"tag": "engineering"}'
+```
+
+**Search items across all collections or within one:**
+```bash
+python3 SCRIPT item_search 'キーワード'
+python3 SCRIPT item_search 'キーワード' <collection_id>
+```
+
+**Delete an item:**
+```bash
+python3 SCRIPT item_delete <item_id>
+```
+
+**Create relations between items and entries/persons:**
+```bash
+python3 SCRIPT item_relate '{"item_id": 1, "related_person_id": 3, "relation_type": "部長"}'
+python3 SCRIPT item_relate '{"item_id": 1, "related_item_id": 5, "relation_type": "depends_on"}'
+python3 SCRIPT item_relate '{"item_id": 2, "related_entry_id": 10, "relation_type": "milestone"}'
+```
+
+**Remove a relation:**
+```bash
+python3 SCRIPT item_unrelate <relation_id>
+```
+
+**Example use cases:**
+- **組織図**: Create a collection, add departments as top-level items, teams as children, link persons
+- **プロジェクト管理**: Collection with project items, milestones as children, link to tasks (entries)
+- **製品カタログ**: Collection with products, features as children, custom data fields
+- **技術スタック**: Collection of technologies used, linked to relevant projects
+- **会議室・設備**: Collection of resources with availability data
+
+When the user mentions structured data that doesn't fit into entries or persons,
+proactively suggest creating a collection for it.
 
 ## Response Guidelines
 
