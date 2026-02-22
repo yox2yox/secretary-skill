@@ -2,7 +2,7 @@
 
 import json
 
-from db import get_connection, ensure_schema, parse_tags, DB_PATH
+from db import get_connection, ensure_schema, seed_default_collections, parse_tags, DB_PATH
 
 
 def _save_item_tags(conn, item_id, tags):
@@ -74,11 +74,12 @@ def _insert_item(conn, collection_id, data):
 
 
 def cmd_init():
-    """Initialize the database."""
+    """Initialize the database and seed default collections."""
     conn = get_connection()
     ensure_schema(conn)
+    seed_default_collections(conn)
     conn.close()
-    print(json.dumps({"status": "ok", "message": "Database initialized", "path": DB_PATH}))
+    print(json.dumps({"status": "ok", "message": "Database initialized with default collections", "path": DB_PATH}))
 
 
 ## -- Collection commands ----------------------------------------------------
