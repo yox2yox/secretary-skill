@@ -33,7 +33,7 @@ python3 SCRIPT item_add '<json>'
 | `type` | string | アイテムのタイプ名（事前に `type_set` で定義が必要） |
 | `title` | string | タイトル（必須） |
 | `content` | string | 本文・詳細テキスト |
-| `data` | object | タイプの `fields_schema` に基づく構造化データ（JSON） |
+| `data` | object | タイプの `fields_schema` に基づく構造化データ（JSON）。refフィールドは自動的に `item_relations` テーブルに保存される |
 | `parent_id` | integer | 親アイテムのID（階層構造用） |
 | `status` | string | ステータス（デフォルト: `"active"`） |
 
@@ -172,6 +172,10 @@ python3 SCRIPT item_list '{"type": "task", "limit": 10}'
 
 キーワードでアイテムを全文検索します。FTS5（trigram）を使用し、利用できない場合はLIKE検索にフォールバックします。
 
+**関連アイテム横断検索:** 検索はアイテム自体だけでなく、`item_relations` で
+関連付けされたアイテムの内容も対象とします。例えば「田中」で検索すると、
+田中さんの人物アイテムに関連付けされたタスクやイベントも結果に含まれます。
+
 ```bash
 python3 SCRIPT item_search '<keyword>' [type]
 ```
@@ -180,13 +184,14 @@ python3 SCRIPT item_search '<keyword>' [type]
 - `keyword`（必須）: 検索キーワード
 - `type`（任意）: タイプ名で絞り込み（ポリモーフィック: 子孫タイプも含む）
 
-**検索対象:** `title`, `content`, `data` フィールド
+**検索対象:** `title`, `content`, `data` フィールド、および関連アイテムの全フィールド
 
 **例:**
 ```bash
 python3 SCRIPT item_search 'ミーティング'
 python3 SCRIPT item_search '佐藤' person
 python3 SCRIPT item_search '会議' event
+python3 SCRIPT item_search '田中' task    # 田中さんに関連付けされたタスクも返される
 ```
 
 最大50件を返します。

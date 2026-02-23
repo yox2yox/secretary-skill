@@ -2,16 +2,51 @@
 
 import json
 
-from db import get_connection, ensure_schema, seed_defaults, get_type_descendants, DB_PATH
+from db import get_connection, ensure_schema, seed_defaults, get_type_descendants, get_ref_fields, DB_PATH
 
 
 def _enrich_items(conn, items):
-    """Parse data JSON for item dicts (batch)."""
+    """Parse data JSON and load relations from item_relations table."""
+    if not items:
+        return items
+
     for item in items:
         try:
             item["data"] = json.loads(item["data"]) if isinstance(item["data"], str) else item["data"]
         except (json.JSONDecodeError, TypeError):
             item["data"] = {}
+
+    # Load relations for all items in one query
+    item_ids = [item["id"] for item in items]
+    placeholders = ",".join("?" for _ in item_ids)
+    rel_rows = conn.execute(
+        f"SELECT item_id, related_item_id, field_name FROM item_relations WHERE item_id IN ({placeholders})",
+        item_ids,
+    ).fetchall()
+
+    # Group relations by item_id
+    rel_map = {}  # item_id -> {field_name -> [related_item_ids]}
+    for r in rel_rows:
+        rel_map.setdefault(r["item_id"], {}).setdefault(r["field_name"], []).append(r["related_item_id"])
+
+    # Build ref field info per type
+    type_ref_cache = {}
+    for item in items:
+        itype = item.get("type")
+        if itype and itype not in type_ref_cache:
+            type_ref_cache[itype] = get_ref_fields(conn, itype)
+
+    # Merge relations into item data
+    for item in items:
+        item_rels = rel_map.get(item["id"], {})
+        ref_fields = type_ref_cache.get(item.get("type"), {})
+        for fname, ids in item_rels.items():
+            finfo = ref_fields.get(fname, {})
+            if finfo.get("multiple", False):
+                item["data"][fname] = ids
+            else:
+                item["data"][fname] = ids[0] if ids else None
+
     return items
 
 
@@ -29,6 +64,43 @@ def _validate_type(conn, type_name):
     return None
 
 
+def _extract_refs(conn, type_name, item_data):
+    """Extract ref fields from item data dict.
+
+    Returns (cleaned_data, relations) where relations is a list of
+    (related_item_id, field_name) tuples.
+    """
+    if not type_name or not isinstance(item_data, dict):
+        return item_data, []
+
+    ref_fields = get_ref_fields(conn, type_name)
+    if not ref_fields:
+        return item_data, []
+
+    cleaned = dict(item_data)
+    relations = []
+    for fname, finfo in ref_fields.items():
+        if fname not in cleaned:
+            continue
+        val = cleaned.pop(fname)
+        if finfo["multiple"] and isinstance(val, list):
+            for v in val:
+                if v is not None:
+                    relations.append((int(v), fname))
+        elif not finfo["multiple"] and val is not None:
+            relations.append((int(val), fname))
+    return cleaned, relations
+
+
+def _save_relations(conn, item_id, relations):
+    """Save item relations to the item_relations table."""
+    for related_id, field_name in relations:
+        conn.execute(
+            "INSERT OR IGNORE INTO item_relations (item_id, related_item_id, field_name) VALUES (?, ?, ?)",
+            (item_id, related_id, field_name),
+        )
+
+
 def _insert_item(conn, data):
     """Insert a single item and return its ID."""
     type_name = data.get("type")
@@ -37,8 +109,11 @@ def _insert_item(conn, data):
         raise ValueError(err)
 
     item_data = data.get("data", {})
-    if isinstance(item_data, dict):
-        item_data = json.dumps(item_data, ensure_ascii=False)
+    if isinstance(item_data, str):
+        item_data = json.loads(item_data)
+
+    # Extract ref fields before saving to JSON
+    cleaned_data, relations = _extract_refs(conn, type_name, item_data)
 
     cursor = conn.execute(
         """INSERT INTO items (type, title, content, data, parent_id, status)
@@ -47,12 +122,17 @@ def _insert_item(conn, data):
             type_name,
             data["title"],
             data.get("content", ""),
-            item_data,
+            json.dumps(cleaned_data, ensure_ascii=False),
             data.get("parent_id"),
             data.get("status", "active"),
         ),
     )
-    return cursor.lastrowid
+    item_id = cursor.lastrowid
+
+    # Save relations
+    _save_relations(conn, item_id, relations)
+
+    return item_id
 
 
 ## -- Database initialization ------------------------------------------------
@@ -146,6 +226,8 @@ def cmd_item_update(item_id, update_json):
     conn = get_connection()
     ensure_schema(conn)
 
+    iid = int(item_id)
+
     set_clauses = []
     params = []
 
@@ -162,21 +244,48 @@ def cmd_item_update(item_id, update_json):
             set_clauses.append(f"{field} = ?")
             params.append(updates[field])
 
+    # Determine the type (may be changing or existing)
+    type_name = updates.get("type")
+    if type_name is None:
+        row = conn.execute("SELECT type FROM items WHERE id = ?", (iid,)).fetchone()
+        type_name = row["type"] if row else None
+
     if "data" in updates:
         d = updates["data"]
         if isinstance(d, dict):
-            # Merge with existing data
+            # Extract ref fields from the update data
+            ref_data, relations = _extract_refs(conn, type_name, d)
+
+            # Merge non-ref data with existing data
             row = conn.execute(
-                "SELECT data FROM items WHERE id = ?", (int(item_id),)
+                "SELECT data FROM items WHERE id = ?", (iid,)
             ).fetchone()
             if row:
                 try:
                     existing = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
                 except (json.JSONDecodeError, TypeError):
                     existing = {}
-                existing.update(d)
-                d = existing
-            d = json.dumps(d, ensure_ascii=False)
+                existing.update(ref_data)
+                ref_data = existing
+            d = json.dumps(ref_data, ensure_ascii=False)
+
+            # Update relations: delete old relations for the updated fields and insert new ones
+            updated_field_names = set()
+            for _, fname in relations:
+                updated_field_names.add(fname)
+            # Also detect ref fields that were set to None/empty (explicit removal)
+            ref_fields = get_ref_fields(conn, type_name) if type_name else {}
+            for fname in ref_fields:
+                if fname in updates["data"]:
+                    updated_field_names.add(fname)
+
+            for fname in updated_field_names:
+                conn.execute(
+                    "DELETE FROM item_relations WHERE item_id = ? AND field_name = ?",
+                    (iid, fname),
+                )
+            _save_relations(conn, iid, relations)
+
         set_clauses.append("data = ?")
         params.append(d)
 
@@ -185,7 +294,7 @@ def cmd_item_update(item_id, update_json):
         return
 
     set_clauses.append("updated_at = datetime('now', 'localtime')")
-    params.append(int(item_id))
+    params.append(iid)
     conn.execute(
         f"UPDATE items SET {', '.join(set_clauses)} WHERE id = ?",
         params,
@@ -193,7 +302,7 @@ def cmd_item_update(item_id, update_json):
 
     conn.commit()
     conn.close()
-    print(json.dumps({"status": "ok", "id": int(item_id)}))
+    print(json.dumps({"status": "ok", "id": iid}))
 
 
 def cmd_item_delete(item_id):
@@ -253,26 +362,67 @@ def cmd_item_list(filter_json=None):
 
 
 def _search_items_like(conn, keyword, type_names=None):
-    """Search items using LIKE (fallback)."""
+    """Search items using LIKE (fallback), including matches through related items."""
     pattern = f"%{keyword}%"
     if type_names:
         placeholders = ",".join("?" for _ in type_names)
-        return conn.execute(
+        # Direct matches
+        direct = conn.execute(
             f"""SELECT * FROM items
                WHERE type IN ({placeholders}) AND (title LIKE ? OR content LIKE ? OR data LIKE ?)
                ORDER BY created_at DESC LIMIT 50""",
             type_names + [pattern, pattern, pattern],
         ).fetchall()
-    return conn.execute(
+        direct_ids = {r["id"] for r in direct}
+
+        # Matches via related items
+        related = conn.execute(
+            f"""SELECT DISTINCT i.* FROM item_relations ir
+               JOIN items i ON i.id = ir.item_id
+               JOIN items rel ON rel.id = ir.related_item_id
+               WHERE i.type IN ({placeholders})
+                 AND (rel.title LIKE ? OR rel.content LIKE ? OR rel.data LIKE ?)
+               LIMIT 50""",
+            type_names + [pattern, pattern, pattern],
+        ).fetchall()
+
+        result = list(direct)
+        for r in related:
+            if r["id"] not in direct_ids:
+                result.append(r)
+        return result[:50]
+
+    # No type filter
+    direct = conn.execute(
         """SELECT * FROM items
            WHERE title LIKE ? OR content LIKE ? OR data LIKE ?
            ORDER BY created_at DESC LIMIT 50""",
         (pattern, pattern, pattern),
     ).fetchall()
+    direct_ids = {r["id"] for r in direct}
+
+    related = conn.execute(
+        """SELECT DISTINCT i.* FROM item_relations ir
+           JOIN items i ON i.id = ir.item_id
+           JOIN items rel ON rel.id = ir.related_item_id
+           WHERE rel.title LIKE ? OR rel.content LIKE ? OR rel.data LIKE ?
+           LIMIT 50""",
+        (pattern, pattern, pattern),
+    ).fetchall()
+
+    result = list(direct)
+    for r in related:
+        if r["id"] not in direct_ids:
+            result.append(r)
+    return result[:50]
 
 
 def cmd_item_search(keyword, type_name=None):
-    """Search items (optionally within a type and its descendants) using FTS5 with LIKE fallback."""
+    """Search items (optionally within a type and its descendants) using FTS5 with LIKE fallback.
+
+    Search includes related items: if an item is linked to another item that
+    matches the keyword, the linking item is also returned.
+    """
     conn = get_connection()
     ensure_schema(conn)
 
@@ -284,7 +434,8 @@ def cmd_item_search(keyword, type_name=None):
     try:
         if type_names:
             placeholders = ",".join("?" for _ in type_names)
-            rows = conn.execute(
+            # Direct FTS matches
+            direct = conn.execute(
                 f"""SELECT i.*
                    FROM items_fts fts
                    JOIN items i ON i.id = fts.rowid
@@ -292,8 +443,27 @@ def cmd_item_search(keyword, type_name=None):
                    ORDER BY rank LIMIT 50""",
                 [keyword] + type_names,
             ).fetchall()
+
+            # Matches via related items (FTS on related, filter source by type)
+            related = conn.execute(
+                f"""SELECT DISTINCT i.*
+                   FROM item_relations ir
+                   JOIN items i ON i.id = ir.item_id
+                   JOIN items_fts fts ON fts.rowid = ir.related_item_id
+                   WHERE items_fts MATCH ? AND i.type IN ({placeholders})
+                   LIMIT 50""",
+                [keyword] + type_names,
+            ).fetchall()
+
+            direct_ids = {r["id"] for r in direct}
+            rows = list(direct)
+            for r in related:
+                if r["id"] not in direct_ids:
+                    rows.append(r)
+            rows = rows[:50]
         else:
-            rows = conn.execute(
+            # Direct FTS matches
+            direct = conn.execute(
                 """SELECT i.*
                    FROM items_fts fts
                    JOIN items i ON i.id = fts.rowid
@@ -301,6 +471,24 @@ def cmd_item_search(keyword, type_name=None):
                    ORDER BY rank LIMIT 50""",
                 (keyword,),
             ).fetchall()
+
+            # Matches via related items
+            related = conn.execute(
+                """SELECT DISTINCT i.*
+                   FROM item_relations ir
+                   JOIN items i ON i.id = ir.item_id
+                   JOIN items_fts fts ON fts.rowid = ir.related_item_id
+                   WHERE items_fts MATCH ?
+                   LIMIT 50""",
+                (keyword,),
+            ).fetchall()
+
+            direct_ids = {r["id"] for r in direct}
+            rows = list(direct)
+            for r in related:
+                if r["id"] not in direct_ids:
+                    rows.append(r)
+            rows = rows[:50]
     except Exception:
         pass
 
