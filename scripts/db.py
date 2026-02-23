@@ -43,6 +43,17 @@ CREATE INDEX IF NOT EXISTS idx_collection_items_parent_id ON collection_items(pa
 CREATE INDEX IF NOT EXISTS idx_collection_items_status ON collection_items(status);
 CREATE INDEX IF NOT EXISTS idx_collection_items_collection_status ON collection_items(collection_id, status);
 
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+CREATE INDEX IF NOT EXISTS idx_tags_parent_id ON tags(parent_id);
+
 CREATE TABLE IF NOT EXISTS collection_item_tags (
     item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
     tag TEXT NOT NULL,
@@ -231,6 +242,22 @@ def _migrate(conn):
                     )
                 conn.execute("UPDATE collections SET type = ? WHERE id = ?", (type_name, row[0]))
             conn.commit()
+
+    # Populate tags table from existing collection_item_tags
+    if "collection_item_tags" in tables and "tags" not in tables:
+        # tags table will be created by ensure_schema before _migrate is called
+        pass
+    # After schema creation, ensure all tags in collection_item_tags have entries in tags table
+    tags_table_exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='tags'"
+    ).fetchone()
+    if tags_table_exists:
+        conn.execute(
+            """INSERT OR IGNORE INTO tags (name)
+               SELECT DISTINCT tag FROM collection_item_tags
+               WHERE tag NOT IN (SELECT name FROM tags)"""
+        )
+        conn.commit()
 
     # Remove type column from collection_items if present (items now inherit from collection)
     if "collection_items" in tables:

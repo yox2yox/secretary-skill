@@ -6,8 +6,10 @@ from db import get_connection, ensure_schema, seed_default_collections, parse_ta
 
 
 def _save_item_tags(conn, item_id, tags):
-    """Save tags for a collection item."""
+    """Save tags for a collection item. Also ensures each tag exists in the tags table."""
     for tag in tags:
+        # Ensure tag exists in the tags table
+        conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
         conn.execute(
             "INSERT OR IGNORE INTO collection_item_tags (item_id, tag) VALUES (?, ?)",
             (item_id, tag),
