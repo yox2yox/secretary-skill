@@ -1,12 +1,11 @@
 """Tag management and type definition commands.
 
-Types define the schema (expected data fields) for collections. They are stored
-in the 'types' table and referenced by collections.type via foreign key.
-All items in a collection share the same type (and thus the same fields_schema).
+Types define the schema (expected data fields) for items. They are stored
+in the 'types' table and referenced by items.type via foreign key.
 
 Tags are hierarchical labels for search/categorization. Each tag can have a
 parent_id to form a tree structure. Tags are defined in the 'tags' table and
-referenced by tag_id (foreign key) in 'collection_item_tags'.
+referenced by tag_id (foreign key) in 'item_tags'.
 """
 
 import json
@@ -185,7 +184,7 @@ def cmd_tag_delete(tag_id):
         return
 
     tag_name = row["name"]
-    # collection_item_tags rows are removed automatically via ON DELETE CASCADE
+    # item_tags rows are removed automatically via ON DELETE CASCADE
     # children's parent_id will be SET NULL via FK
     conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
     conn.commit()
@@ -206,7 +205,7 @@ def cmd_tag_get(tag_id):
         return
 
     count_row = conn.execute(
-        "SELECT COUNT(*) as count FROM collection_item_tags WHERE tag_id = ?",
+        "SELECT COUNT(*) as count FROM item_tags WHERE tag_id = ?",
         (tag_id,),
     ).fetchone()
 
@@ -225,7 +224,7 @@ def cmd_tag_get(tag_id):
     d["children"] = []
     for child in children_rows:
         c_count = conn.execute(
-            "SELECT COUNT(*) as count FROM collection_item_tags WHERE tag_id = ?",
+            "SELECT COUNT(*) as count FROM item_tags WHERE tag_id = ?",
             (child["id"],),
         ).fetchone()
         d["children"].append(_build_tag_dict(child, count=c_count["count"]))
@@ -243,7 +242,7 @@ def cmd_tags_list():
 
     # Get usage counts for all tags
     count_rows = conn.execute(
-        "SELECT tag_id, COUNT(*) as count FROM collection_item_tags GROUP BY tag_id"
+        "SELECT tag_id, COUNT(*) as count FROM item_tags GROUP BY tag_id"
     ).fetchall()
     count_map = {r["tag_id"]: r["count"] for r in count_rows}
 
@@ -267,7 +266,7 @@ def cmd_tags_list_level(level):
     ).fetchall()
 
     count_rows = conn.execute(
-        "SELECT tag_id, COUNT(*) as count FROM collection_item_tags GROUP BY tag_id"
+        "SELECT tag_id, COUNT(*) as count FROM item_tags GROUP BY tag_id"
     ).fetchall()
     count_map = {r["tag_id"]: r["count"] for r in count_rows}
 
@@ -296,7 +295,7 @@ def cmd_tags_tree():
     tag_rows = conn.execute("SELECT * FROM tags ORDER BY name").fetchall()
 
     count_rows = conn.execute(
-        "SELECT tag_id, COUNT(*) as count FROM collection_item_tags GROUP BY tag_id"
+        "SELECT tag_id, COUNT(*) as count FROM item_tags GROUP BY tag_id"
     ).fetchall()
     count_map = {r["tag_id"]: r["count"] for r in count_rows}
 

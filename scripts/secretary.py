@@ -1,37 +1,32 @@
 #!/usr/bin/env python3
 """Secretary Skill - SQLite storage for personal information management.
 
-All data is stored as items within dynamic collections. Relationships between
+All data is stored as items with types and tags. Relationships between
 items are expressed via IDs in each item's JSON data field.
 
 Usage:
     python3 secretary.py <command> [args...]
 
 Commands:
-    init                                  Initialize the database
-    col_create '<json>'                   Create a new collection
-    col_list                              List all collections
-    col_get <id>                          Get collection details
-    col_update <id> '<json>'              Update a collection
-    col_delete <id>                       Delete a collection
-    item_add <col_id> '<json>'            Add item to a collection
-    item_add_batch <col_id> '<json>'      Add multiple items
-    item_get <id>                         Get item details
-    item_update <id> '<json>'             Update an item
-    item_delete <id>                      Delete an item
-    item_list <col_id> ['<json_filter>']  List items in a collection
-    item_search '<keyword>' [col_id]      Search items
-    tag_create '<json>'                   Create a tag (with optional parent_id)
-    tag_update <id> '<json>'              Update a tag
-    tag_delete <id>                       Delete a tag
-    tag_get <id>                          Get tag details with children
-    tags_list                             List all tags with hierarchy info
-    tags_list_level <level>               List tags at a specific hierarchy level
-    tags_tree                             List all tags as a tree structure
-    type_set '<json>'                     Define a type
-    type_get <name>                       Get a type definition
-    type_list                             List all types
-    type_delete <name>                    Delete a type
+    init                              Initialize the database
+    item_add '<json>'                 Add an item
+    item_add_batch '<json>'           Add multiple items
+    item_get <id>                     Get item details
+    item_update <id> '<json>'         Update an item
+    item_delete <id>                  Delete an item
+    item_list ['<json_filter>']       List items with optional filters
+    item_search '<keyword>' [type]    Search items
+    tag_create '<json>'               Create a tag (with optional parent_id)
+    tag_update <id> '<json>'          Update a tag
+    tag_delete <id>                   Delete a tag
+    tag_get <id>                      Get tag details with children
+    tags_list                         List all tags with hierarchy info
+    tags_list_level <level>           List tags at a specific hierarchy level
+    tags_tree                         List all tags as a tree structure
+    type_set '<json>'                 Define a type
+    type_get <name>                   Get a type definition
+    type_list                         List all types
+    type_delete <name>                Delete a type
 """
 
 import json
@@ -41,9 +36,8 @@ import os
 # Allow imports from the scripts directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from collections_mod import (
+from items_mod import (
     cmd_init,
-    cmd_col_create, cmd_col_list, cmd_col_get, cmd_col_update, cmd_col_delete,
     cmd_item_add, cmd_item_add_batch, cmd_item_get, cmd_item_update,
     cmd_item_delete, cmd_item_list, cmd_item_search,
 )
@@ -58,7 +52,6 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: secretary.py <command> [args...]")
         print("Commands: init,")
-        print("         col_create, col_list, col_get, col_update, col_delete,")
         print("         item_add, item_add_batch, item_get, item_update, item_delete,")
         print("         item_list, item_search,")
         print("         tag_create, tag_update, tag_delete, tag_get,")
@@ -71,22 +64,11 @@ def main():
     try:
         if command == "init":
             cmd_init()
-        # Collection commands
-        elif command == "col_create":
-            cmd_col_create(sys.argv[2])
-        elif command == "col_list":
-            cmd_col_list()
-        elif command == "col_get":
-            cmd_col_get(sys.argv[2])
-        elif command == "col_update":
-            cmd_col_update(sys.argv[2], sys.argv[3])
-        elif command == "col_delete":
-            cmd_col_delete(sys.argv[2])
-        # Collection item commands
+        # Item commands
         elif command == "item_add":
-            cmd_item_add(sys.argv[2], sys.argv[3])
+            cmd_item_add(sys.argv[2])
         elif command == "item_add_batch":
-            cmd_item_add_batch(sys.argv[2], sys.argv[3])
+            cmd_item_add_batch(sys.argv[2])
         elif command == "item_get":
             cmd_item_get(sys.argv[2])
         elif command == "item_update":
@@ -94,7 +76,7 @@ def main():
         elif command == "item_delete":
             cmd_item_delete(sys.argv[2])
         elif command == "item_list":
-            cmd_item_list(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
+            cmd_item_list(sys.argv[2] if len(sys.argv) > 2 else None)
         elif command == "item_search":
             cmd_item_search(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
         # Tag commands

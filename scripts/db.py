@@ -16,32 +16,21 @@ CREATE TABLE IF NOT EXISTS types (
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
-CREATE TABLE IF NOT EXISTS collections (
+CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
-    display_name TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
     type TEXT REFERENCES types(name) ON DELETE SET NULL,
-    created_at TEXT DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name);
-
-CREATE TABLE IF NOT EXISTS collection_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     data TEXT NOT NULL DEFAULT '{}',
-    parent_id INTEGER REFERENCES collection_items(id) ON DELETE SET NULL,
+    parent_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
     status TEXT DEFAULT 'active',
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
-CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id);
-CREATE INDEX IF NOT EXISTS idx_collection_items_parent_id ON collection_items(parent_id);
-CREATE INDEX IF NOT EXISTS idx_collection_items_status ON collection_items(status);
-CREATE INDEX IF NOT EXISTS idx_collection_items_collection_status ON collection_items(collection_id, status);
+CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);
+CREATE INDEX IF NOT EXISTS idx_items_parent_id ON items(parent_id);
+CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
+CREATE INDEX IF NOT EXISTS idx_items_type_status ON items(type, status);
 
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,30 +45,30 @@ CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 CREATE INDEX IF NOT EXISTS idx_tags_parent_id ON tags(parent_id);
 CREATE INDEX IF NOT EXISTS idx_tags_level ON tags(level);
 
-CREATE TABLE IF NOT EXISTS collection_item_tags (
-    item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS item_tags (
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (item_id, tag_id)
 );
-CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag_id ON collection_item_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
 """
 
 FTS_SQL = """
-CREATE VIRTUAL TABLE IF NOT EXISTS collection_items_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
     title, content, data,
-    content=collection_items, content_rowid=id,
+    content=items, content_rowid=id,
     tokenize='trigram'
 );
 
-CREATE TRIGGER IF NOT EXISTS collection_items_fts_ai AFTER INSERT ON collection_items BEGIN
-    INSERT INTO collection_items_fts(rowid, title, content, data) VALUES (new.id, new.title, new.content, new.data);
+CREATE TRIGGER IF NOT EXISTS items_fts_ai AFTER INSERT ON items BEGIN
+    INSERT INTO items_fts(rowid, title, content, data) VALUES (new.id, new.title, new.content, new.data);
 END;
-CREATE TRIGGER IF NOT EXISTS collection_items_fts_ad AFTER DELETE ON collection_items BEGIN
-    INSERT INTO collection_items_fts(collection_items_fts, rowid, title, content, data) VALUES('delete', old.id, old.title, old.content, old.data);
+CREATE TRIGGER IF NOT EXISTS items_fts_ad AFTER DELETE ON items BEGIN
+    INSERT INTO items_fts(items_fts, rowid, title, content, data) VALUES('delete', old.id, old.title, old.content, old.data);
 END;
-CREATE TRIGGER IF NOT EXISTS collection_items_fts_au AFTER UPDATE ON collection_items BEGIN
-    INSERT INTO collection_items_fts(collection_items_fts, rowid, title, content, data) VALUES('delete', old.id, old.title, old.content, old.data);
-    INSERT INTO collection_items_fts(rowid, title, content, data) VALUES (new.id, new.title, new.content, new.data);
+CREATE TRIGGER IF NOT EXISTS items_fts_au AFTER UPDATE ON items BEGIN
+    INSERT INTO items_fts(items_fts, rowid, title, content, data) VALUES('delete', old.id, old.title, old.content, old.data);
+    INSERT INTO items_fts(rowid, title, content, data) VALUES (new.id, new.title, new.content, new.data);
 END;
 """
 
@@ -114,7 +103,7 @@ DEFAULT_TYPES = [
             {"name": "end_time", "type": "time", "description": "終了時刻 (HH:MM)"},
             {"name": "location", "type": "string", "description": "場所"},
             {"name": "source", "type": "string", "description": "情報の出所"},
-            {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": True, "description": "関連人物のアイテムID"},
+            {"name": "related_persons", "type": "ref", "ref_type": "person", "multiple": True, "description": "関連人物のアイテムID"},
         ],
     },
     {
@@ -130,7 +119,7 @@ DEFAULT_TYPES = [
             {"name": "location", "type": "string", "description": "場所"},
             {"name": "recurrence", "type": "string", "description": "繰り返しパターン (daily/weekly/monthly/yearly)"},
             {"name": "recurrence_until", "type": "date", "description": "繰り返し終了日"},
-            {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": True, "description": "関連人物のアイテムID"},
+            {"name": "related_persons", "type": "ref", "ref_type": "person", "multiple": True, "description": "関連人物のアイテムID"},
         ],
     },
     {
@@ -150,8 +139,8 @@ DEFAULT_TYPES = [
         "fields_schema": [
             {"name": "due_date", "type": "date", "description": "締め切り"},
             {"name": "priority", "type": "string", "description": "優先度 (high/medium/low)"},
-            {"name": "assignee", "type": "ref", "ref_collection": "persons", "description": "担当者のアイテムID"},
-            {"name": "related_goal", "type": "ref", "ref_collection": "goals", "description": "関連目標のアイテムID"},
+            {"name": "assignee", "type": "ref", "ref_type": "person", "description": "担当者のアイテムID"},
+            {"name": "related_goal", "type": "ref", "ref_type": "goal", "description": "関連目標のアイテムID"},
         ],
     },
     {
@@ -161,7 +150,7 @@ DEFAULT_TYPES = [
         "fields_schema": [
             {"name": "decided_date", "type": "date", "description": "決定日"},
             {"name": "context", "type": "string", "description": "決定の背景"},
-            {"name": "related_persons", "type": "ref", "ref_collection": "persons", "multiple": True, "description": "関係者のアイテムID"},
+            {"name": "related_persons", "type": "ref", "ref_type": "person", "multiple": True, "description": "関係者のアイテムID"},
         ],
     },
     {
@@ -173,16 +162,6 @@ DEFAULT_TYPES = [
             {"name": "source", "type": "string", "description": "情報の出所"},
         ],
     },
-]
-
-DEFAULT_COLLECTIONS = [
-    {"name": "persons", "display_name": "人物", "description": "ユーザー（オーナー）と周囲の人々のプロフィール", "type": "person"},
-    {"name": "events", "display_name": "イベント", "description": "起こった出来事や進行中の出来事", "type": "event"},
-    {"name": "plans", "display_name": "計画", "description": "将来の予定された活動", "type": "plan"},
-    {"name": "goals", "display_name": "目標", "description": "目標と抱負", "type": "goal"},
-    {"name": "tasks", "display_name": "タスク", "description": "実行すべきアクション項目", "type": "task"},
-    {"name": "decisions", "display_name": "決定事項", "description": "決定済みまたは保留中の決定事項", "type": "decision"},
-    {"name": "notes", "display_name": "メモ", "description": "記憶しておく価値のある一般的な情報", "type": "note"},
 ]
 
 
@@ -217,7 +196,7 @@ def _migrate(conn):
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()}
 
-    # Migrate tag_schemas -> types
+    # --- Legacy migration: tag_schemas -> types ---
     if "tag_schemas" in tables and "types" not in tables:
         conn.execute(
             """CREATE TABLE types (
@@ -236,18 +215,15 @@ def _migrate(conn):
         )
         conn.execute("DROP TABLE tag_schemas")
 
-    # Migrate: move fields_schema from collections to types, add type FK to collections
+    # --- Legacy migration: fields_schema from collections to types ---
     if "collections" in tables:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(collections)").fetchall()}
         if "fields_schema" in cols and "type" not in cols:
-            # Add type column to collections
             conn.execute("ALTER TABLE collections ADD COLUMN type TEXT REFERENCES types(name) ON DELETE SET NULL")
-            # Migrate each collection's fields_schema into a type
             import json as _json
             rows = conn.execute("SELECT id, name, display_name, description, fields_schema FROM collections").fetchall()
             for row in rows:
                 col_name = row[1]
-                # Use singular form for type name (strip trailing 's' as heuristic)
                 type_name = col_name.rstrip("s") if col_name.endswith("s") else col_name
                 fs = row[4] or "[]"
                 existing_type = conn.execute("SELECT 1 FROM types WHERE name = ?", (type_name,)).fetchone()
@@ -260,7 +236,7 @@ def _migrate(conn):
                 conn.execute("UPDATE collections SET type = ? WHERE id = ?", (type_name, row[0]))
             conn.commit()
 
-    # Migrate tags table: add level column if missing
+    # --- Legacy migration: tags.level column ---
     if "tags" in tables:
         tag_cols = {row[1] for row in conn.execute("PRAGMA table_info(tags)").fetchall()}
         if "level" not in tag_cols:
@@ -268,18 +244,16 @@ def _migrate(conn):
         _recalc_tag_levels(conn)
         conn.commit()
 
-    # Migrate collection_item_tags: tag TEXT -> tag_id INTEGER FK
+    # --- Legacy migration: collection_item_tags tag TEXT -> tag_id INTEGER ---
     if "collection_item_tags" in tables:
         cit_cols = {row[1] for row in conn.execute("PRAGMA table_info(collection_item_tags)").fetchall()}
         if "tag" in cit_cols and "tag_id" not in cit_cols:
-            # Ensure all referenced tag names exist in tags table
             conn.execute(
                 """INSERT OR IGNORE INTO tags (name)
                    SELECT DISTINCT tag FROM collection_item_tags
                    WHERE tag NOT IN (SELECT name FROM tags)"""
             )
             conn.commit()
-            # Recreate table with tag_id FK
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS collection_item_tags_new (
                     item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
@@ -295,11 +269,10 @@ def _migrate(conn):
                 CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag_id ON collection_item_tags(tag_id);
             """)
 
-    # Remove type column from collection_items if present (items now inherit from collection)
+    # --- Legacy migration: remove type column from collection_items ---
     if "collection_items" in tables:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(collection_items)").fetchall()}
         if "type" in cols:
-            # SQLite doesn't support DROP COLUMN before 3.35.0; recreate table
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS collection_items_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,6 +291,69 @@ def _migrate(conn):
                 ALTER TABLE collection_items_new RENAME TO collection_items;
             """)
 
+    # --- Migrate from collections-based schema to flat items schema ---
+    if "collection_items" in tables:
+        # Copy data from old collection_items to new items table
+        if "collections" in tables:
+            conn.execute(
+                """INSERT OR IGNORE INTO items (id, type, title, content, data, parent_id, status, created_at, updated_at)
+                    SELECT ci.id, c.type, ci.title, ci.content, ci.data, ci.parent_id, ci.status, ci.created_at, ci.updated_at
+                    FROM collection_items ci
+                    LEFT JOIN collections c ON ci.collection_id = c.id"""
+            )
+        else:
+            conn.execute(
+                """INSERT OR IGNORE INTO items (id, type, title, content, data, parent_id, status, created_at, updated_at)
+                    SELECT id, NULL, title, content, data, parent_id, status, created_at, updated_at
+                    FROM collection_items"""
+            )
+
+        # Migrate tags from collection_item_tags to item_tags
+        if "collection_item_tags" in tables:
+            conn.execute(
+                """INSERT OR IGNORE INTO item_tags (item_id, tag_id)
+                    SELECT item_id, tag_id FROM collection_item_tags"""
+            )
+            conn.execute("DROP TABLE collection_item_tags")
+
+        # Drop old FTS table and triggers
+        conn.execute("DROP TRIGGER IF EXISTS collection_items_fts_ai")
+        conn.execute("DROP TRIGGER IF EXISTS collection_items_fts_ad")
+        conn.execute("DROP TRIGGER IF EXISTS collection_items_fts_au")
+        conn.execute("DROP TABLE IF EXISTS collection_items_fts")
+
+        # Drop old tables
+        conn.execute("DROP TABLE IF EXISTS collection_items")
+        conn.execute("DROP TABLE IF EXISTS collections")
+        conn.commit()
+
+    # --- Migrate ref_collection -> ref_type in type field schemas ---
+    # Refresh tables list after possible drops above
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "types" in tables:
+        import json as _json
+        type_rows = conn.execute("SELECT name, fields_schema FROM types").fetchall()
+        for row in type_rows:
+            try:
+                fs = _json.loads(row["fields_schema"]) if row["fields_schema"] else []
+            except (_json.JSONDecodeError, TypeError):
+                continue
+            changed = False
+            for field in fs:
+                if "ref_collection" in field and "ref_type" not in field:
+                    col_name = field.pop("ref_collection")
+                    type_name = col_name.rstrip("s") if col_name.endswith("s") else col_name
+                    field["ref_type"] = type_name
+                    changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE types SET fields_schema = ? WHERE name = ?",
+                    (_json.dumps(fs, ensure_ascii=False), row["name"]),
+                )
+        conn.commit()
+
 
 def ensure_schema(conn):
     """Ensure the database schema exists."""
@@ -330,8 +366,8 @@ def ensure_schema(conn):
         pass
 
 
-def seed_default_collections(conn):
-    """Insert default types and collections if they don't already exist."""
+def seed_defaults(conn):
+    """Insert default types if they don't already exist."""
     import json as _json
 
     for t in DEFAULT_TYPES:
@@ -343,18 +379,6 @@ def seed_default_collections(conn):
                VALUES (?, ?, ?, ?)""",
             (t["name"], t["display_name"], t["description"],
              _json.dumps(t["fields_schema"], ensure_ascii=False)),
-        )
-
-    for col in DEFAULT_COLLECTIONS:
-        existing = conn.execute(
-            "SELECT id FROM collections WHERE name = ?", (col["name"],)
-        ).fetchone()
-        if existing:
-            continue
-        conn.execute(
-            """INSERT INTO collections (name, display_name, description, type)
-               VALUES (?, ?, ?, ?)""",
-            (col["name"], col["display_name"], col["description"], col["type"]),
         )
     conn.commit()
 
