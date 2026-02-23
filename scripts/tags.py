@@ -1,7 +1,8 @@
 """Tag listing and type definition commands.
 
-Types define the schema (expected data fields) for items. They are stored in
-the 'types' table and referenced by collection_items.type via foreign key.
+Types define the schema (expected data fields) for collections. They are stored
+in the 'types' table and referenced by collections.type via foreign key.
+All items in a collection share the same type (and thus the same fields_schema).
 
 Tags are simple labels for search/categorization, stored in collection_item_tags.
 """

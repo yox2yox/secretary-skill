@@ -15,7 +15,7 @@ def _save_item_tags(conn, item_id, tags):
 
 
 def _enrich_items(conn, items):
-    """Add tags to item dicts (batch). Type is already a column on the item."""
+    """Add tags to item dicts (batch)."""
     if not items:
         return items
 
@@ -55,25 +55,16 @@ def _validate_type(conn, type_name):
 
 
 def _insert_item(conn, collection_id, data):
-    """Insert a single collection item and return its ID.
-
-    Raises ValueError if the specified type does not exist.
-    """
-    type_name = data.get("type")
-    err = _validate_type(conn, type_name)
-    if err:
-        raise ValueError(err)
-
+    """Insert a single collection item and return its ID."""
     item_data = data.get("data", {})
     if isinstance(item_data, dict):
         item_data = json.dumps(item_data, ensure_ascii=False)
 
     cursor = conn.execute(
-        """INSERT INTO collection_items (collection_id, type, title, content, data, parent_id, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO collection_items (collection_id, title, content, data, parent_id, status)
+           VALUES (?, ?, ?, ?, ?, ?)""",
         (
             int(collection_id),
-            type_name,
             data["title"],
             data.get("content", ""),
             item_data,
@@ -105,23 +96,29 @@ def cmd_init():
 
 
 def cmd_col_create(data_json):
-    """Create a new collection."""
+    """Create a new collection.
+
+    Accepts an optional 'type' field referencing an existing type name.
+    """
     data = json.loads(data_json)
     conn = get_connection()
     ensure_schema(conn)
 
-    fields_schema = data.get("fields_schema", [])
-    if isinstance(fields_schema, list):
-        fields_schema = json.dumps(fields_schema, ensure_ascii=False)
+    type_name = data.get("type")
+    err = _validate_type(conn, type_name)
+    if err:
+        conn.close()
+        print(json.dumps({"status": "error", "message": err}))
+        return
 
     cursor = conn.execute(
-        """INSERT INTO collections (name, display_name, description, fields_schema)
+        """INSERT INTO collections (name, display_name, description, type)
            VALUES (?, ?, ?, ?)""",
         (
             data["name"],
             data.get("display_name", data["name"]),
             data.get("description", ""),
-            fields_schema,
+            type_name,
         ),
     )
     col_id = cursor.lastrowid
@@ -131,13 +128,15 @@ def cmd_col_create(data_json):
 
 
 def cmd_col_list():
-    """List all collections with item counts."""
+    """List all collections with item counts and resolved type info."""
     conn = get_connection()
     ensure_schema(conn)
 
     rows = conn.execute(
-        """SELECT c.*, COUNT(ci.id) as item_count
+        """SELECT c.*, t.fields_schema AS type_fields_schema,
+                  COUNT(ci.id) as item_count
            FROM collections c
+           LEFT JOIN types t ON c.type = t.name
            LEFT JOIN collection_items ci ON c.id = ci.collection_id
            GROUP BY c.id
            ORDER BY c.name"""
@@ -147,8 +146,9 @@ def cmd_col_list():
     for row in rows:
         d = dict(row)
         try:
-            d["fields_schema"] = json.loads(d["fields_schema"])
+            d["fields_schema"] = json.loads(d.pop("type_fields_schema")) if d.get("type_fields_schema") else []
         except (json.JSONDecodeError, TypeError):
+            d.pop("type_fields_schema", None)
             d["fields_schema"] = []
         result.append(d)
 
@@ -157,13 +157,15 @@ def cmd_col_list():
 
 
 def cmd_col_get(col_id):
-    """Get a collection with its schema and item count."""
+    """Get a collection with its resolved type schema and item count."""
     conn = get_connection()
     ensure_schema(conn)
 
     row = conn.execute(
-        """SELECT c.*, COUNT(ci.id) as item_count
+        """SELECT c.*, t.fields_schema AS type_fields_schema,
+                  COUNT(ci.id) as item_count
            FROM collections c
+           LEFT JOIN types t ON c.type = t.name
            LEFT JOIN collection_items ci ON c.id = ci.collection_id
            WHERE c.id = ?
            GROUP BY c.id""",
@@ -177,8 +179,9 @@ def cmd_col_get(col_id):
 
     d = dict(row)
     try:
-        d["fields_schema"] = json.loads(d["fields_schema"])
+        d["fields_schema"] = json.loads(d.pop("type_fields_schema")) if d.get("type_fields_schema") else []
     except (json.JSONDecodeError, TypeError):
+        d.pop("type_fields_schema", None)
         d["fields_schema"] = []
 
     conn.close()
@@ -191,18 +194,20 @@ def cmd_col_update(col_id, update_json):
     conn = get_connection()
     ensure_schema(conn)
 
+    # Validate type if being updated
+    if "type" in updates and updates["type"] is not None:
+        err = _validate_type(conn, updates["type"])
+        if err:
+            conn.close()
+            print(json.dumps({"status": "error", "message": err}))
+            return
+
     set_clauses = []
     params = []
-    for field in ("name", "display_name", "description"):
+    for field in ("name", "display_name", "description", "type"):
         if field in updates:
             set_clauses.append(f"{field} = ?")
             params.append(updates[field])
-    if "fields_schema" in updates:
-        fs = updates["fields_schema"]
-        if isinstance(fs, list):
-            fs = json.dumps(fs, ensure_ascii=False)
-        set_clauses.append("fields_schema = ?")
-        params.append(fs)
 
     if not set_clauses:
         print(json.dumps({"status": "error", "message": "No valid fields to update"}))
@@ -273,7 +278,8 @@ def cmd_item_get(item_id):
     ensure_schema(conn)
 
     row = conn.execute(
-        """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name
+        """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name,
+                  c.type as collection_type
            FROM collection_items ci
            JOIN collections c ON ci.collection_id = c.id
            WHERE ci.id = ?""",
@@ -308,18 +314,10 @@ def cmd_item_update(item_id, update_json):
     conn = get_connection()
     ensure_schema(conn)
 
-    # Validate type if being updated
-    if "type" in updates and updates["type"] is not None:
-        err = _validate_type(conn, updates["type"])
-        if err:
-            conn.close()
-            print(json.dumps({"status": "error", "message": err}))
-            return
-
     set_clauses = []
     params = []
 
-    for field in ("type", "title", "content", "parent_id", "status"):
+    for field in ("title", "content", "parent_id", "status"):
         if field in updates:
             set_clauses.append(f"{field} = ?")
             params.append(updates[field])
@@ -395,9 +393,6 @@ def cmd_item_list(collection_id, filter_json=None):
         else:
             where_clauses.append("ci.parent_id = ?")
             params.append(int(filters["parent_id"]))
-    if "type" in filters:
-        where_clauses.append("ci.type = ?")
-        params.append(filters["type"])
     if "tag" in filters:
         where_clauses.append(
             "EXISTS (SELECT 1 FROM collection_item_tags t WHERE t.item_id = ci.id AND t.tag = ?)"
@@ -427,14 +422,16 @@ def _search_items_like(conn, keyword, collection_id=None):
     pattern = f"%{keyword}%"
     if collection_id:
         return conn.execute(
-            """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name
+            """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name,
+                      c.type as collection_type
                FROM collection_items ci JOIN collections c ON ci.collection_id = c.id
                WHERE ci.collection_id = ? AND (ci.title LIKE ? OR ci.content LIKE ? OR ci.data LIKE ?)
                ORDER BY ci.created_at DESC LIMIT 50""",
             (int(collection_id), pattern, pattern, pattern),
         ).fetchall()
     return conn.execute(
-        """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name
+        """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name,
+                  c.type as collection_type
            FROM collection_items ci JOIN collections c ON ci.collection_id = c.id
            WHERE ci.title LIKE ? OR ci.content LIKE ? OR ci.data LIKE ?
            ORDER BY ci.created_at DESC LIMIT 50""",
@@ -451,7 +448,8 @@ def cmd_item_search(keyword, collection_id=None):
     try:
         if collection_id:
             rows = conn.execute(
-                """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name
+                """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name,
+                          c.type as collection_type
                    FROM collection_items_fts fts
                    JOIN collection_items ci ON ci.id = fts.rowid
                    JOIN collections c ON ci.collection_id = c.id
@@ -461,7 +459,8 @@ def cmd_item_search(keyword, collection_id=None):
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name
+                """SELECT ci.*, c.name as collection_name, c.display_name as collection_display_name,
+                          c.type as collection_type
                    FROM collection_items_fts fts
                    JOIN collection_items ci ON ci.id = fts.rowid
                    JOIN collections c ON ci.collection_id = c.id
