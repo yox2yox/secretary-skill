@@ -22,10 +22,10 @@ Commands:
     item_list <col_id> ['<json_filter>']  List items in a collection
     item_search '<keyword>' [col_id]      Search items
     tags_list                             List all tags
-    tag_schema_set '<json>'               Define a tag's schema
-    tag_schema_get <tag>                  Get a tag's schema
-    tag_schema_list                       List all tag schemas
-    tag_schema_delete <tag>               Delete a tag's schema
+    type_set '<json>'                     Define a type
+    type_get <name>                       Get a type definition
+    type_list                             List all types
+    type_delete <name>                    Delete a type
 """
 
 import json
@@ -42,8 +42,8 @@ from collections_mod import (
     cmd_item_delete, cmd_item_list, cmd_item_search,
 )
 from tags import (
-    cmd_tags_list, cmd_tag_schema_set, cmd_tag_schema_get,
-    cmd_tag_schema_list, cmd_tag_schema_delete,
+    cmd_tags_list, cmd_type_set, cmd_type_get,
+    cmd_type_list, cmd_type_delete,
 )
 
 
@@ -54,7 +54,7 @@ def main():
         print("         col_create, col_list, col_get, col_update, col_delete,")
         print("         item_add, item_add_batch, item_get, item_update, item_delete,")
         print("         item_list, item_search,")
-        print("         tags_list, tag_schema_set, tag_schema_get, tag_schema_list, tag_schema_delete")
+        print("         tags_list, type_set, type_get, type_list, type_delete")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -88,17 +88,18 @@ def main():
             cmd_item_list(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
         elif command == "item_search":
             cmd_item_search(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
-        # Tag listing & schema commands
+        # Tag listing
         elif command == "tags_list":
             cmd_tags_list()
-        elif command == "tag_schema_set":
-            cmd_tag_schema_set(sys.argv[2])
-        elif command == "tag_schema_get":
-            cmd_tag_schema_get(sys.argv[2])
-        elif command == "tag_schema_list":
-            cmd_tag_schema_list()
-        elif command == "tag_schema_delete":
-            cmd_tag_schema_delete(sys.argv[2])
+        # Type commands
+        elif command == "type_set":
+            cmd_type_set(sys.argv[2])
+        elif command == "type_get":
+            cmd_type_get(sys.argv[2])
+        elif command == "type_list":
+            cmd_type_list()
+        elif command == "type_delete":
+            cmd_type_delete(sys.argv[2])
         else:
             print(json.dumps({"status": "error", "message": f"Unknown command: {command}"}))
             sys.exit(1)

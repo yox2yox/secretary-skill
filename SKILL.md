@@ -269,11 +269,26 @@ python3 SCRIPT item_list <col_id> '{"parent_id": null}'
 
 ## タイプ（type）
 
-`type` はアイテムの情報の種類を定義するフィールドです。`collection_items` テーブルの
-カラムとして直接保持され、1アイテムにつき1つだけ設定できます（または未設定）。
+`type` はアイテムの情報の種類を定義するフィールドです。`types` テーブルで定義され、
+`collection_items.type` から外部キーで参照されます。
 
-タイプごとに `tag_schema_set` でスキーマを定義すると、そのタイプのアイテムの
-`data` フィールドに期待される構造を明示できます。
+- 1アイテムにつき1つだけ設定可能（または未設定）
+- **アイテムにtypeを設定する前に、必ず `type_set` でタイプを定義してください**
+- タイプを削除すると、そのタイプを持つアイテムの `type` は `null` になります
+
+**タイプの定義（先に実行）：**
+```bash
+python3 SCRIPT type_set '{
+  "name": "project",
+  "display_name": "プロジェクト",
+  "description": "社内プロジェクトに関するデータ",
+  "fields_schema": [
+    {"name": "status", "type": "string", "description": "進捗状態", "required": true},
+    {"name": "deadline", "type": "date", "description": "期限"},
+    {"name": "budget", "type": "number", "description": "予算（万円）"}
+  ]
+}'
+```
 
 **アイテムにタイプを設定して保存：**
 ```bash
@@ -285,25 +300,11 @@ python3 SCRIPT item_add <col_id> '{
 }'
 ```
 
-**タイプのスキーマを定義：**
+**タイプの取得/一覧/削除：**
 ```bash
-python3 SCRIPT tag_schema_set '{
-  "tag": "project",
-  "display_name": "プロジェクト",
-  "description": "社内プロジェクトに関するデータ",
-  "fields_schema": [
-    {"name": "status", "type": "string", "description": "進捗状態", "required": true},
-    {"name": "deadline", "type": "date", "description": "期限"},
-    {"name": "budget", "type": "number", "description": "予算（万円）"}
-  ]
-}'
-```
-
-**タイプスキーマの取得/一覧/削除：**
-```bash
-python3 SCRIPT tag_schema_get <type_name>
-python3 SCRIPT tag_schema_list
-python3 SCRIPT tag_schema_delete <type_name>
+python3 SCRIPT type_get <type_name>
+python3 SCRIPT type_list
+python3 SCRIPT type_delete <type_name>
 ```
 
 **タイプでアイテムを絞り込み：**

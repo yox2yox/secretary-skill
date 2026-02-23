@@ -44,8 +44,26 @@ def _enrich_items(conn, items):
     return items
 
 
+def _validate_type(conn, type_name):
+    """Check that a type exists in the types table. Returns error message or None."""
+    if type_name is None:
+        return None
+    row = conn.execute("SELECT 1 FROM types WHERE name = ?", (type_name,)).fetchone()
+    if not row:
+        return f"Type not found: '{type_name}'. Define it first with type_set."
+    return None
+
+
 def _insert_item(conn, collection_id, data):
-    """Insert a single collection item and return its ID."""
+    """Insert a single collection item and return its ID.
+
+    Raises ValueError if the specified type does not exist.
+    """
+    type_name = data.get("type")
+    err = _validate_type(conn, type_name)
+    if err:
+        raise ValueError(err)
+
     item_data = data.get("data", {})
     if isinstance(item_data, dict):
         item_data = json.dumps(item_data, ensure_ascii=False)
@@ -55,7 +73,7 @@ def _insert_item(conn, collection_id, data):
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             int(collection_id),
-            data.get("type"),
+            type_name,
             data["title"],
             data.get("content", ""),
             item_data,
@@ -217,7 +235,12 @@ def cmd_item_add(collection_id, data_json):
     conn = get_connection()
     ensure_schema(conn)
 
-    item_id = _insert_item(conn, collection_id, data)
+    try:
+        item_id = _insert_item(conn, collection_id, data)
+    except ValueError as e:
+        conn.close()
+        print(json.dumps({"status": "error", "message": str(e)}))
+        return
 
     conn.commit()
     conn.close()
@@ -231,8 +254,13 @@ def cmd_item_add_batch(collection_id, data_json):
     ensure_schema(conn)
 
     ids = []
-    for data in items:
-        ids.append(_insert_item(conn, collection_id, data))
+    try:
+        for data in items:
+            ids.append(_insert_item(conn, collection_id, data))
+    except ValueError as e:
+        conn.close()
+        print(json.dumps({"status": "error", "message": str(e)}))
+        return
 
     conn.commit()
     conn.close()
@@ -279,6 +307,14 @@ def cmd_item_update(item_id, update_json):
     updates = json.loads(update_json)
     conn = get_connection()
     ensure_schema(conn)
+
+    # Validate type if being updated
+    if "type" in updates and updates["type"] is not None:
+        err = _validate_type(conn, updates["type"])
+        if err:
+            conn.close()
+            print(json.dumps({"status": "error", "message": err}))
+            return
 
     set_clauses = []
     params = []

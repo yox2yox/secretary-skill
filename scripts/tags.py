@@ -1,7 +1,9 @@
-"""Tag listing and tag schema commands.
+"""Tag listing and type definition commands.
 
-Tag schemas define the expected data fields for a given 'type' value on items.
-Tags (for search/categorization) and types (for data schema) are separate concepts.
+Types define the schema (expected data fields) for items. They are stored in
+the 'types' table and referenced by collection_items.type via foreign key.
+
+Tags are simple labels for search/categorization, stored in collection_item_tags.
 """
 
 import json
@@ -24,27 +26,27 @@ def cmd_tags_list():
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def cmd_tag_schema_set(data_json):
-    """Define or update a type's schema (expected data fields for items of this type)."""
+def cmd_type_set(data_json):
+    """Define or update a type (expected data fields for items of this type)."""
     data = json.loads(data_json)
     conn = get_connection()
     ensure_schema(conn)
 
-    tag = data["tag"]
+    name = data["name"]
     fields_schema = data.get("fields_schema", [])
     if isinstance(fields_schema, list):
         fields_schema = json.dumps(fields_schema, ensure_ascii=False)
 
     conn.execute(
-        """INSERT INTO tag_schemas (tag, display_name, description, fields_schema)
+        """INSERT INTO types (name, display_name, description, fields_schema)
            VALUES (?, ?, ?, ?)
-           ON CONFLICT(tag)
+           ON CONFLICT(name)
            DO UPDATE SET display_name = excluded.display_name,
                          description = excluded.description,
                          fields_schema = excluded.fields_schema,
                          updated_at = datetime('now', 'localtime')""",
         (
-            tag,
+            name,
             data.get("display_name", ""),
             data.get("description", ""),
             fields_schema,
@@ -52,18 +54,18 @@ def cmd_tag_schema_set(data_json):
     )
     conn.commit()
     conn.close()
-    print(json.dumps({"status": "ok", "tag": tag}))
+    print(json.dumps({"status": "ok", "name": name}))
 
 
-def cmd_tag_schema_get(tag):
-    """Get a type's schema definition."""
+def cmd_type_get(name):
+    """Get a type's definition."""
     conn = get_connection()
     ensure_schema(conn)
 
-    row = conn.execute("SELECT * FROM tag_schemas WHERE tag = ?", (tag,)).fetchone()
+    row = conn.execute("SELECT * FROM types WHERE name = ?", (name,)).fetchone()
     if not row:
         conn.close()
-        print(json.dumps({"status": "error", "message": f"No schema defined for type: {tag}"}))
+        print(json.dumps({"status": "error", "message": f"Type not found: {name}"}))
         return
 
     d = dict(row)
@@ -76,12 +78,12 @@ def cmd_tag_schema_get(tag):
     print(json.dumps(d, ensure_ascii=False, indent=2))
 
 
-def cmd_tag_schema_list():
-    """List all defined type schemas."""
+def cmd_type_list():
+    """List all defined types."""
     conn = get_connection()
     ensure_schema(conn)
 
-    rows = conn.execute("SELECT * FROM tag_schemas ORDER BY tag").fetchall()
+    rows = conn.execute("SELECT * FROM types ORDER BY name").fetchall()
     result = []
     for row in rows:
         d = dict(row)
@@ -95,11 +97,11 @@ def cmd_tag_schema_list():
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def cmd_tag_schema_delete(tag):
-    """Delete a type's schema definition (does not affect items with this type)."""
+def cmd_type_delete(name):
+    """Delete a type definition. Items with this type will have their type set to NULL."""
     conn = get_connection()
     ensure_schema(conn)
-    conn.execute("DELETE FROM tag_schemas WHERE tag = ?", (tag,))
+    conn.execute("DELETE FROM types WHERE name = ?", (name,))
     conn.commit()
     conn.close()
-    print(json.dumps({"status": "ok", "tag": tag}))
+    print(json.dumps({"status": "ok", "name": name}))
