@@ -11,10 +11,13 @@ CREATE TABLE IF NOT EXISTS types (
     name TEXT PRIMARY KEY,
     display_name TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
+    parent_type TEXT REFERENCES types(name) ON DELETE SET NULL,
+    abstract INTEGER NOT NULL DEFAULT 0,
     fields_schema TEXT NOT NULL DEFAULT '[]',
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
+CREATE INDEX IF NOT EXISTS idx_types_parent_type ON types(parent_type);
 
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,26 +34,6 @@ CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);
 CREATE INDEX IF NOT EXISTS idx_items_parent_id ON items(parent_id);
 CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
 CREATE INDEX IF NOT EXISTS idx_items_type_status ON items(type, status);
-
-CREATE TABLE IF NOT EXISTS tags (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
-    display_name TEXT NOT NULL DEFAULT '',
-    parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
-    level INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
-CREATE INDEX IF NOT EXISTS idx_tags_parent_id ON tags(parent_id);
-CREATE INDEX IF NOT EXISTS idx_tags_level ON tags(level);
-
-CREATE TABLE IF NOT EXISTS item_tags (
-    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (item_id, tag_id)
-);
-CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
 """
 
 FTS_SQL = """
@@ -175,21 +158,6 @@ def get_connection():
     return conn
 
 
-def _recalc_tag_levels(conn):
-    """Recalculate level for all tags based on parent_id chain."""
-    rows = conn.execute("SELECT id, parent_id FROM tags").fetchall()
-    parent_map = {r["id"]: r["parent_id"] for r in rows}
-    for tag_id in parent_map:
-        level = 0
-        current = parent_map.get(tag_id)
-        visited = set()
-        while current is not None and current not in visited:
-            visited.add(current)
-            level += 1
-            current = parent_map.get(current)
-        conn.execute("UPDATE tags SET level = ? WHERE id = ?", (level, tag_id))
-
-
 def _migrate(conn):
     """Run all necessary migrations for existing databases."""
     tables = {row[0] for row in conn.execute(
@@ -203,6 +171,8 @@ def _migrate(conn):
                 name TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
+                parent_type TEXT REFERENCES types(name) ON DELETE SET NULL,
+                abstract INTEGER NOT NULL DEFAULT 0,
                 fields_schema TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 updated_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -236,39 +206,6 @@ def _migrate(conn):
                 conn.execute("UPDATE collections SET type = ? WHERE id = ?", (type_name, row[0]))
             conn.commit()
 
-    # --- Legacy migration: tags.level column ---
-    if "tags" in tables:
-        tag_cols = {row[1] for row in conn.execute("PRAGMA table_info(tags)").fetchall()}
-        if "level" not in tag_cols:
-            conn.execute("ALTER TABLE tags ADD COLUMN level INTEGER NOT NULL DEFAULT 0")
-        _recalc_tag_levels(conn)
-        conn.commit()
-
-    # --- Legacy migration: collection_item_tags tag TEXT -> tag_id INTEGER ---
-    if "collection_item_tags" in tables:
-        cit_cols = {row[1] for row in conn.execute("PRAGMA table_info(collection_item_tags)").fetchall()}
-        if "tag" in cit_cols and "tag_id" not in cit_cols:
-            conn.execute(
-                """INSERT OR IGNORE INTO tags (name)
-                   SELECT DISTINCT tag FROM collection_item_tags
-                   WHERE tag NOT IN (SELECT name FROM tags)"""
-            )
-            conn.commit()
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS collection_item_tags_new (
-                    item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
-                    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-                    PRIMARY KEY (item_id, tag_id)
-                );
-                INSERT OR IGNORE INTO collection_item_tags_new (item_id, tag_id)
-                    SELECT cit.item_id, t.id
-                    FROM collection_item_tags cit
-                    JOIN tags t ON t.name = cit.tag;
-                DROP TABLE collection_item_tags;
-                ALTER TABLE collection_item_tags_new RENAME TO collection_item_tags;
-                CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag_id ON collection_item_tags(tag_id);
-            """)
-
     # --- Legacy migration: remove type column from collection_items ---
     if "collection_items" in tables:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(collection_items)").fetchall()}
@@ -293,7 +230,6 @@ def _migrate(conn):
 
     # --- Migrate from collections-based schema to flat items schema ---
     if "collection_items" in tables:
-        # Copy data from old collection_items to new items table
         if "collections" in tables:
             conn.execute(
                 """INSERT OR IGNORE INTO items (id, type, title, content, data, parent_id, status, created_at, updated_at)
@@ -308,27 +244,34 @@ def _migrate(conn):
                     FROM collection_items"""
             )
 
-        # Migrate tags from collection_item_tags to item_tags
-        if "collection_item_tags" in tables:
-            conn.execute(
-                """INSERT OR IGNORE INTO item_tags (item_id, tag_id)
-                    SELECT item_id, tag_id FROM collection_item_tags"""
-            )
-            conn.execute("DROP TABLE collection_item_tags")
-
         # Drop old FTS table and triggers
         conn.execute("DROP TRIGGER IF EXISTS collection_items_fts_ai")
         conn.execute("DROP TRIGGER IF EXISTS collection_items_fts_ad")
         conn.execute("DROP TRIGGER IF EXISTS collection_items_fts_au")
         conn.execute("DROP TABLE IF EXISTS collection_items_fts")
 
-        # Drop old tables
+        conn.execute("DROP TABLE IF EXISTS collection_item_tags")
         conn.execute("DROP TABLE IF EXISTS collection_items")
         conn.execute("DROP TABLE IF EXISTS collections")
         conn.commit()
 
+    # --- Drop legacy tag tables ---
+    if "item_tags" in tables:
+        conn.execute("DROP TABLE item_tags")
+    if "tags" in tables:
+        conn.execute("DROP TABLE tags")
+    conn.commit()
+
+    # --- Add parent_type and abstract columns to existing types table ---
+    if "types" in tables:
+        type_cols = {row[1] for row in conn.execute("PRAGMA table_info(types)").fetchall()}
+        if "parent_type" not in type_cols:
+            conn.execute("ALTER TABLE types ADD COLUMN parent_type TEXT REFERENCES types(name) ON DELETE SET NULL")
+        if "abstract" not in type_cols:
+            conn.execute("ALTER TABLE types ADD COLUMN abstract INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+
     # --- Migrate ref_collection -> ref_type in type field schemas ---
-    # Refresh tables list after possible drops above
     tables = {row[0] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()}
@@ -375,18 +318,47 @@ def seed_defaults(conn):
         if existing:
             continue
         conn.execute(
-            """INSERT INTO types (name, display_name, description, fields_schema)
-               VALUES (?, ?, ?, ?)""",
+            """INSERT INTO types (name, display_name, description, parent_type, abstract, fields_schema)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (t["name"], t["display_name"], t["description"],
+             t.get("parent_type"), 1 if t.get("abstract") else 0,
              _json.dumps(t["fields_schema"], ensure_ascii=False)),
         )
     conn.commit()
 
 
-def parse_tags(tags_input):
-    """Parse tags from string or list input."""
-    if isinstance(tags_input, list):
-        return [t.strip() for t in tags_input if t.strip()]
-    if isinstance(tags_input, str) and tags_input.strip():
-        return [t.strip() for t in tags_input.split(",") if t.strip()]
-    return []
+def get_type_descendants(conn, type_name):
+    """Get all descendant type names (including the given type itself)."""
+    result = [type_name]
+    children = conn.execute(
+        "SELECT name FROM types WHERE parent_type = ?", (type_name,)
+    ).fetchall()
+    for child in children:
+        result.extend(get_type_descendants(conn, child["name"]))
+    return result
+
+
+def get_resolved_fields(conn, type_name):
+    """Get the merged fields_schema for a type, including inherited fields from ancestors."""
+    import json as _json
+
+    row = conn.execute(
+        "SELECT fields_schema, parent_type FROM types WHERE name = ?", (type_name,)
+    ).fetchone()
+    if not row:
+        return []
+
+    try:
+        own_fields = _json.loads(row["fields_schema"]) if row["fields_schema"] else []
+    except (_json.JSONDecodeError, TypeError):
+        own_fields = []
+
+    if row["parent_type"]:
+        parent_fields = get_resolved_fields(conn, row["parent_type"])
+        # Parent fields first, then own fields (own fields can override by name)
+        own_names = {f["name"] for f in own_fields}
+        merged = [f for f in parent_fields if f["name"] not in own_names]
+        merged.extend(own_fields)
+        return merged
+
+    return own_fields

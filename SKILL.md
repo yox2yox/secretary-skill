@@ -2,13 +2,16 @@
 name: secretary
 description: >
   個人秘書スキル。すべてのデータをアイテムとして管理するSQLiteベースの
-  情報管理システムです。各アイテムはタイプ（スキーマ定義）とタグ（分類ラベル）を
-  持ち、イベント、計画、目標、タスク、人物など、あらゆる種類の構造化データを
-  保存・検索します。データ間の関係はアイテムのJSONデータフィールド内でIDにより
-  参照します。ユーザーが日常の活動報告、イベント記録、目標設定、将来のタスク計画、
-  保存された情報への質問、個人・連絡先プロフィールの管理、構造化ドメインデータの
-  保存・検索を行う際にこのスキルを使用してください。ユーザーがサマリー、スケジュール、
-  目標や計画のステータスを求めた場合にもトリガーされます。
+  情報管理システムです。各アイテムはタイプ（スキーマ定義）を持ち、
+  タイプは継承とアブストラクトをサポートします。イベント、計画、目標、
+  タスク、人物など、あらゆる種類の構造化データを保存・検索します。
+  タイプの継承により、親タイプで検索すると子タイプのアイテムも含めた
+  ポリモーフィックな検索が可能です。データ間の関係はアイテムのJSONデータ
+  フィールド内でIDにより参照します。ユーザーが日常の活動報告、イベント記録、
+  目標設定、将来のタスク計画、保存された情報への質問、個人・連絡先
+  プロフィールの管理、構造化ドメインデータの保存・検索を行う際にこのスキルを
+  使用してください。ユーザーがサマリー、スケジュール、目標や計画のステータスを
+  求めた場合にもトリガーされます。
 allowed-tools: Bash
 ---
 
@@ -19,14 +22,15 @@ allowed-tools: Bash
 
 ## アーキテクチャ
 
-すべてのデータは**タイプ**、**アイテム**、**タグ**で管理されます。
+すべてのデータは**タイプ**と**アイテム**で管理されます。
 
-- **タイプ**: データのスキーマ（フィールド定義）を持つ型定義（例: person, event, task）
-- **アイテム**: 個々のデータレコード。タイプを直接持ち、タグで分類される
-- **タグ**: 階層構造を持つ分類ラベル。1アイテムに複数付与可能
+- **タイプ**: データのスキーマ（フィールド定義）を持つ型定義。継承（parent_type）と
+  アブストラクト（abstract）をサポートし、多態性を持つ
+- **アイテム**: 個々のデータレコード。タイプを直接持つ
 - **リレーション**: アイテムの `data` JSONフィールド内にIDで他のアイテムを参照
 
-固定テーブルはありません。タイプを動的に作成でき、アイテムにタイプとタグを紐付けます。
+タイプを動的に作成でき、アイテムにタイプを紐付けます。タイプの継承により、
+親タイプで検索・フィルタリングすると子タイプのアイテムも自動的に含まれます。
 
 ## スクリプトの場所
 
@@ -74,10 +78,25 @@ python3 SCRIPT init
 
 ユーザーの非構造化入力を解析し、適切なタイプでアイテムとして保存します。
 
-**まず既存のタイプを確認：**
+**ステップ1: タイプ階層を確認する**
+
+まず `type_tree` で現在のタイプ階層構造を把握します。これにより、
+どのタイプ（親タイプ・子タイプ含む）が利用可能かを理解できます。
+
 ```bash
-python3 SCRIPT type_list
+python3 SCRIPT type_tree
 ```
+
+**ステップ2: 情報を分割し、適切なタイプを選択する**
+
+ユーザーの報告を意味のある単位に分割し、それぞれに最適なタイプを割り当てます。
+
+- 1つの報告に複数の種類の情報が含まれる場合、別々のアイテムとして保存する
+- 子タイプが存在する場合は、より具体的な子タイプを優先して使用する
+  （例: `event` より `meeting` が適切なら `meeting` を使う）
+- 抽象タイプ（abstract）は直接使用できないため、必ず具象の子タイプを選ぶ
+
+**ステップ3: アイテムを保存する**
 
 **アイテムの保存例：**
 ```bash
@@ -92,14 +111,13 @@ python3 SCRIPT item_add '{
     "end_time": "15:00",
     "location": "会議室A",
     "related_persons": [3, 5]
-  },
-  "tags": "work,meeting,team"
+  }
 }'
 
 # 複数アイテムを一括保存
 python3 SCRIPT item_add_batch '[
-  {"type": "task", "title": "API設計書を仕上げる", "content": "来週水曜までに完成させる", "data": {"due_date": "2025-01-22", "priority": "high", "related_goal": 10}, "tags": "work,api"},
-  {"type": "task", "title": "テスト環境の構築", "content": "ステージング環境をセットアップ", "data": {"due_date": "2025-01-25", "priority": "medium"}, "tags": "work,infra"}
+  {"type": "task", "title": "API設計書を仕上げる", "content": "来週水曜までに完成させる", "data": {"due_date": "2025-01-22", "priority": "high", "related_goal": 10}},
+  {"type": "task", "title": "テスト環境の構築", "content": "ステージング環境をセットアップ", "data": {"due_date": "2025-01-25", "priority": "medium"}}
 ]'
 ```
 
@@ -119,8 +137,7 @@ python3 SCRIPT item_add '{
     "personality": "INTJ - 内向的だが論理的でビジョンを持つ",
     "preferences": "技術書を読むこと、アーキテクチャ設計",
     "work_style": "午前中に集中作業、午後にミーティング"
-  },
-  "tags": "engineer,manager"
+  }
 }'
 ```
 
@@ -141,34 +158,50 @@ python3 SCRIPT item_add '{
 - `"multiple": true` の場合はIDの配列、そうでなければ単一のID
 - 参照先のアイテムの詳細が必要な場合は `item_get` で取得
 
-保存前に `python3 SCRIPT tags_list` で既存のタグを確認し、一貫したタグ名を
-再利用してください。
-
 保存後、何が保存されたかを簡潔なサマリーでユーザーに確認します。レスポンスは
 ユーザーの言語に合わせてください。
 
 ### 3. ユーザーが質問をした場合
 
-最適なクエリ戦略を判断してください：
+**ステップ1: タイプ階層を確認して検索戦略を決める**
+
+まず `type_tree` でタイプ階層を確認し、ユーザーの質問に対して
+どのタイプで絞り込むのが最適かを判断します。
+
+```bash
+python3 SCRIPT type_tree
+```
+
+- 広い範囲を検索したい場合 → 親タイプを指定（子孫タイプも自動的に含まれる）
+- 特定の種類に絞りたい場合 → 具体的な子タイプを指定
+- 種類が不明な場合 → タイプ指定なしで全体検索
+
+**ステップ2: 適切な検索を実行する**
 
 **キーワードで検索（全アイテム横断）：**
 ```bash
 python3 SCRIPT item_search 'キーワード'
 ```
 
-**特定タイプ内で検索：**
+**特定タイプ内で検索（子タイプも含むポリモーフィック検索）：**
 ```bash
-python3 SCRIPT item_search 'キーワード' person
+python3 SCRIPT item_search 'キーワード' event
+# → event タイプおよび event を継承するすべての子タイプのアイテムが対象
 ```
 
 **アイテムを一覧（フィルタ付き）：**
 ```bash
 python3 SCRIPT item_list
 python3 SCRIPT item_list '{"type": "task"}'
-python3 SCRIPT item_list '{"type": "task", "status": "active"}'
-python3 SCRIPT item_list '{"tag": "work"}'
+python3 SCRIPT item_list '{"type": "event", "status": "active"}'
 python3 SCRIPT item_list '{"parent_id": null}'
 ```
+
+タイプフィルタはポリモーフィックです。`{"type": "event"}` で検索すると、
+`event` タイプだけでなく、`event` を継承するすべての子タイプのアイテムも
+返されます。
+
+**ステップ3: 必要に応じて詳細を取得する**
 
 **アイテムの詳細を取得：**
 ```bash
@@ -190,7 +223,6 @@ python3 SCRIPT item_get <item_id>
 ```bash
 python3 SCRIPT item_update <item_id> '{"status": "completed"}'
 python3 SCRIPT item_update <item_id> '{"data": {"priority": "high", "due_date": "2025-02-01"}}'
-python3 SCRIPT item_update <item_id> '{"tags": "work,urgent"}'
 python3 SCRIPT item_update <item_id> '{"type": "task"}'
 ```
 
@@ -220,45 +252,141 @@ python3 SCRIPT item_add '{"type": "note", "title": "フロントエンドチー�
 python3 SCRIPT item_list '{"parent_id": null}'
 ```
 
-## タイプ（type）
+## タイプ（type）— 継承とアブストラクト
 
 `type` はアイテムのデータスキーマを定義する仕組みです。`types` テーブルで定義され、
 `items.type` から外部キーで参照されます。
+
+### 基本機能
 
 - アイテムにはタイプを1つだけ設定可能（または未設定）
 - **アイテムにtypeを設定する前に、必ず `type_set` でタイプを定義してください**
 - タイプを削除すると、そのタイプを持つアイテムの `type` は `null` になります
 
-**タイプの定義：**
+### 型の継承（Inheritance）
+
+タイプは `parent_type` を指定して継承関係を構築できます。
+
+- 子タイプは親タイプの `fields_schema` を**自動的に継承**します
+- 子タイプ独自のフィールドを追加でき、親のフィールドをオーバーライドすることも可能
+- `type_get` で取得すると、`resolved_fields`（継承を解決した全フィールド）が返されます
+
+### アブストラクトタイプ（Abstract）
+
+`"abstract": true` を指定したタイプは直接アイテムに使用できません。
+分類のためのグルーピング用タイプとして機能します。
+
+- アブストラクトタイプをアイテムの `type` に指定するとエラーになります
+- 子タイプ（具象型）のみがアイテムに使用可能です
+- アブストラクトタイプでフィルタリングすると、すべての子孫タイプのアイテムが返されます
+
+### ポリモーフィックフィルタリング
+
+`item_list` や `item_search` でタイプを指定すると、そのタイプおよび
+**すべての子孫タイプ**のアイテムが返されます。
+
+例えば、以下のタイプ階層がある場合：
+
+```
+event (abstract)
+├── meeting
+├── anniversary
+└── incident
+```
+
+`item_list '{"type": "event"}'` は `meeting`、`anniversary`、`incident`
+のすべてのアイテムを返します。
+
+### タイプ定義の例
+
+**基本的なタイプ定義：**
 ```bash
 python3 SCRIPT type_set '{
   "name": "project",
   "display_name": "プロジェクト",
   "description": "社内プロジェクトに関するデータ",
   "fields_schema": [
-    {"name": "status", "type": "string", "description": "進捗状態", "required": true},
+    {"name": "status", "type": "string", "description": "進捗状態"},
     {"name": "deadline", "type": "date", "description": "期限"},
     {"name": "budget", "type": "number", "description": "予算（万円）"},
-    {"name": "owner", "type": "ref", "ref_type": "person", "description": "責任者のアイテムID"},
-    {"name": "related_tasks", "type": "ref", "ref_type": "task", "multiple": true, "description": "関連タスクのアイテムID"}
+    {"name": "owner", "type": "ref", "ref_type": "person", "description": "責任者のアイテムID"}
   ]
 }'
 ```
 
-**アイテムの保存（タイプを指定）：**
+**継承を使ったタイプ定義：**
 ```bash
-python3 SCRIPT item_add '{
-  "type": "project",
-  "title": "プロジェクトAlpha",
-  "data": {"status": "進行中", "deadline": "2025-06-01", "budget": 500},
-  "tags": "work,frontend"
+# 抽象親タイプを定義（共通フィールドを持つ）
+python3 SCRIPT type_set '{
+  "name": "calendar_event",
+  "display_name": "カレンダーイベント",
+  "description": "日時を持つイベントの共通基底タイプ",
+  "abstract": true,
+  "fields_schema": [
+    {"name": "event_date", "type": "date", "description": "日付"},
+    {"name": "start_time", "type": "time", "description": "開始時刻"},
+    {"name": "end_time", "type": "time", "description": "終了時刻"},
+    {"name": "location", "type": "string", "description": "場所"},
+    {"name": "related_persons", "type": "ref", "ref_type": "person", "multiple": true, "description": "関連人物"}
+  ]
+}'
+
+# 具象子タイプ（親のフィールドを継承 + 独自フィールドを追加）
+python3 SCRIPT type_set '{
+  "name": "meeting",
+  "display_name": "会議",
+  "description": "会議・打ち合わせ",
+  "parent_type": "calendar_event",
+  "fields_schema": [
+    {"name": "agenda", "type": "string", "description": "議題"},
+    {"name": "minutes", "type": "string", "description": "議事録"}
+  ]
+}'
+
+python3 SCRIPT type_set '{
+  "name": "anniversary",
+  "display_name": "記念日",
+  "description": "誕生日・記念日などの年次イベント",
+  "parent_type": "calendar_event",
+  "fields_schema": [
+    {"name": "recurrence", "type": "string", "description": "繰り返し (yearly)"},
+    {"name": "category", "type": "string", "description": "種類（誕生日、結婚記念日など）"}
+  ]
 }'
 ```
 
-**タイプの取得/一覧/削除：**
+**アイテムの保存（子タイプを指定）：**
 ```bash
+python3 SCRIPT item_add '{
+  "type": "meeting",
+  "title": "Q1計画会議",
+  "data": {"event_date": "2025-01-20", "start_time": "10:00", "end_time": "11:30", "agenda": "Q1ロードマップ策定"}
+}'
+```
+
+**ポリモーフィック検索：**
+```bash
+# calendar_event 以下のすべてのアイテム（meeting, anniversary など）を検索
+python3 SCRIPT item_list '{"type": "calendar_event"}'
+python3 SCRIPT item_search '会議' calendar_event
+
+# 特定の子タイプのみ
+python3 SCRIPT item_list '{"type": "meeting"}'
+```
+
+### タイプの取得/一覧/ツリー/削除
+
+```bash
+# タイプの詳細を取得（継承解決済みフィールド付き）
 python3 SCRIPT type_get <type_name>
+
+# 全タイプ一覧
 python3 SCRIPT type_list
+
+# タイプ階層をツリー表示
+python3 SCRIPT type_tree
+
+# タイプの削除（子タイプのparent_typeはnullになる）
 python3 SCRIPT type_delete <type_name>
 ```
 
@@ -281,12 +409,36 @@ python3 SCRIPT type_delete <type_name>
 まず `type_list` で既存のタイプを確認し、保存したいデータが既存のタイプに当てはまらないかを検討します。
 
 - 既存タイプの `fields_schema` で定義されたフィールドで表現できるか確認する
+- 子タイプが既に存在していないかも確認する（`type_tree` で階層を確認）
 - 例：会議の議事録 → `event` タイプのアイテムとして `content` に議事録を記載すれば十分
-- 例：買い物リスト → `task` タイプのアイテムとしてタグで分類すれば十分
 
 **既存タイプで対応できる場合は、新しいタイプを作らずに既存のタイプを活用してください。**
 
-#### ステップ2: 既存のタイプを拡張できないか検討する
+#### ステップ2: 既存のタイプの子タイプとして追加できないか検討する
+
+既存のタイプと共通するフィールドが多い場合、そのタイプの子タイプとして定義することを
+検討します。子タイプは親のフィールドを自動的に継承するため、共通フィールドを
+重複定義する必要がありません。
+
+```bash
+# 例：event タイプの子タイプとして meeting を定義
+python3 SCRIPT type_set '{
+  "name": "meeting",
+  "parent_type": "event",
+  "display_name": "会議",
+  "description": "会議・打ち合わせ",
+  "fields_schema": [
+    {"name": "agenda", "type": "string", "description": "議題"}
+  ]
+}'
+```
+
+子タイプとして適切なケース：
+- 親タイプのフィールドをすべて（または大部分）使用する
+- 親タイプの概念を特殊化・具体化している
+- ポリモーフィック検索で親タイプと一緒に検索したい場合
+
+#### ステップ3: 既存のタイプを拡張できないか検討する
 
 既存のタイプでほぼ対応できるが、特定のフィールドが足りない場合は、既存タイプの
 `fields_schema` にフィールドを追加することを検討します。スキーマにないフィールドを
@@ -312,9 +464,10 @@ python3 SCRIPT type_set '{
 拡張が不適切なケース：
 - 追加するフィールドが既存タイプの本来の目的から逸脱する場合
 
-#### ステップ3: 新しいタイプとして追加する
+#### ステップ4: 新しいタイプとして追加する
 
-既存のタイプでは対応できず、拡張も不自然な場合にのみ、新しいタイプを作成します。
+既存のタイプでは対応できず、拡張も子タイプ化も不自然な場合にのみ、新しい
+ルートタイプを作成します。
 
 新しいタイプを作成すべきケース：
 - データの構造が既存のどのタイプとも本質的に異なる
@@ -323,69 +476,10 @@ python3 SCRIPT type_set '{
 - 例：`project`（予算、期限、担当者 — タスクや目標とは別の粒度のデータ）
 
 新しいタイプ作成時の注意：
-- 既存のデフォルトタイプ（person, event, plan, goal, task, decision, note）と意味が重複しないか再確認する
+- 既存のデフォルトタイプと意味が重複しないか再確認する
 - `ref` フィールドで既存タイプとの関連を設計する
 - タイプ名は英語の単数形にする（例: `book`, `project`, `recipe`）
-
-## タグ（tags）
-
-タグは検索・分類用の**階層構造を持つラベル**です。1アイテムに複数付けることができます。
-タイプとは独立した概念で、`tags` テーブルで管理され、`item_tags` テーブルで
-アイテムに紐付けられます。
-
-各タグは `parent_id` を持ち、親子関係によるツリー構造を形成できます。
-例：`work` → `work/frontend` → `work/frontend/react` のような階層を表現できます。
-
-### タグの作成（階層構造の構築）
-
-```bash
-# ルートタグを作成
-python3 SCRIPT tag_create '{"name": "work", "display_name": "仕事"}'
-
-# 子タグを作成（parent_idで親を指定）
-python3 SCRIPT tag_create '{"name": "work-frontend", "display_name": "フロントエンド", "parent_id": 1}'
-python3 SCRIPT tag_create '{"name": "work-backend", "display_name": "バックエンド", "parent_id": 1}'
-
-# さらに深い階層
-python3 SCRIPT tag_create '{"name": "work-frontend-react", "display_name": "React", "parent_id": 2}'
-```
-
-### タグの取得・更新・削除
-
-```bash
-# タグの詳細を取得（子タグ情報付き）
-python3 SCRIPT tag_get <tag_id>
-
-# タグを更新（名前、表示名、親の変更）
-python3 SCRIPT tag_update <tag_id> '{"display_name": "新しい表示名"}'
-python3 SCRIPT tag_update <tag_id> '{"parent_id": 5}'
-python3 SCRIPT tag_update <tag_id> '{"parent_id": null}'  # ルートに移動
-
-# タグを削除（子タグのparent_idはnullになる）
-python3 SCRIPT tag_delete <tag_id>
-```
-
-### タグの一覧表示
-
-```bash
-# 全タグを一覧表示（階層情報・使用数付き）
-python3 SCRIPT tags_list
-
-# 特定の階層レベルのタグを一覧表示（0=ルート、1=第1階層、...）
-python3 SCRIPT tags_list_level 0    # ルートタグのみ
-python3 SCRIPT tags_list_level 1    # 第1階層のタグのみ
-
-# ツリー構造で全タグを表示
-python3 SCRIPT tags_tree
-```
-
-### タグの命名規則
-
-1. **新しいタグを追加する前に必ず既存のタグを確認してください。**
-2. 複数語のタグにはハイフン区切りの小文字を使用：`project-alpha`、`team-lead`
-3. 技術的・汎用的な用語には英語を推奨：`frontend`、`backend`、`meeting`
-4. 日本固有の概念には日本語も可：`経理`、`総務`
-5. 階層関係がある場合は `tag_create` で `parent_id` を指定して親子関係を構築してください
+- 今後の拡張が見込まれる場合はアブストラクトな親タイプの作成も検討する
 
 ## レスポンスガイドライン
 
@@ -422,17 +516,53 @@ python3 SCRIPT tags_tree
 ユーザー: 「今日は14時から佐藤さんとチームミーティングがあって、来月のリリース計画について話し合った。」
 
 アクション:
-1. `type_list` でタイプを確認
-2. personタイプで佐藤さんのIDを検索: `item_search '佐藤' person`
-3. eventタイプでイベントを保存: `item_add '{"type": "event", "title": "チームミーティング", "content": "リリース計画の議論", "data": {"event_date": "...", "start_time": "14:00", "related_persons": [佐藤のID]}}'`
+1. `type_tree` でタイプ階層を確認し、適切なタイプを判断する
+2. 報告を分割：イベント情報（ミーティング）と人物参照（佐藤さん）
+3. personタイプで佐藤さんのIDを検索: `item_search '佐藤' person`
+4. 最適なタイプでイベントを保存（例: `meeting` 子タイプがあればそれを、なければ `event` を使用）:
+   `item_add '{"type": "meeting", "title": "チームミーティング", "content": "リリース計画の議論", "data": {"event_date": "...", "start_time": "14:00", "related_persons": [佐藤のID]}}'`
 
 ### 人物に関連するアイテムの検索
 ユーザー: 「佐藤さんとの最近の打ち合わせ内容は？」
 
 アクション:
-1. 佐藤さんのアイテムIDを検索
-2. 全アイテムで佐藤さんのIDを含むアイテムを検索: `item_search '佐藤'`
-3. または特定タイプ内で検索: `item_search '佐藤' event`
+1. `type_tree` でタイプ階層を確認し、打ち合わせに該当するタイプを特定する
+2. 佐藤さんのアイテムIDを検索: `item_search '佐藤' person`
+3. 打ち合わせ関連のタイプで検索（親タイプを指定すれば子タイプも含まれる）:
+   `item_search '佐藤' event`（event以下の meeting 等も含む）
+
+### 型の継承を活用した分類
+ユーザーが多様なイベントを管理したい場合：
+
+```bash
+# 1. 共通の親タイプを定義（アブストラクト）
+python3 SCRIPT type_set '{
+  "name": "calendar_entry",
+  "display_name": "カレンダー項目",
+  "abstract": true,
+  "description": "日時を持つすべての項目の基底タイプ",
+  "fields_schema": [
+    {"name": "event_date", "type": "date"},
+    {"name": "start_time", "type": "time"},
+    {"name": "end_time", "type": "time"},
+    {"name": "location", "type": "string"}
+  ]
+}'
+
+# 2. 具象子タイプを定義
+python3 SCRIPT type_set '{"name": "meeting", "parent_type": "calendar_entry", "display_name": "会議", "description": "会議", "fields_schema": [{"name": "agenda", "type": "string"}]}'
+python3 SCRIPT type_set '{"name": "workshop", "parent_type": "calendar_entry", "display_name": "ワークショップ", "description": "研修・ワークショップ", "fields_schema": [{"name": "topic", "type": "string"}]}'
+
+# 3. アイテム保存
+python3 SCRIPT item_add '{"type": "meeting", "title": "週次MTG", "data": {"event_date": "2025-01-20", "start_time": "10:00", "agenda": "進捗確認"}}'
+python3 SCRIPT item_add '{"type": "workshop", "title": "AI研修", "data": {"event_date": "2025-01-21", "topic": "LLM活用"}}'
+
+# 4. ポリモーフィック検索（calendar_entry以下をすべて取得）
+python3 SCRIPT item_list '{"type": "calendar_entry"}'
+
+# 5. 特定タイプのみ
+python3 SCRIPT item_list '{"type": "meeting"}'
+```
 
 ### 新しいドメインデータ
 ユーザーが既存のタイプに収まらない構造化データについて言及した場合、
@@ -458,7 +588,6 @@ python3 SCRIPT type_set '{
 python3 SCRIPT item_add '{
   "type": "book",
   "title": "リーダブルコード",
-  "data": {"author": "Dustin Boswell", "rating": 5, "read_date": "2025-01-10"},
-  "tags": "tech,programming"
+  "data": {"author": "Dustin Boswell", "rating": 5, "read_date": "2025-01-10"}
 }'
 ```
