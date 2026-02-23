@@ -17,21 +17,29 @@ from db import get_connection, ensure_schema
 # -- Tag commands ------------------------------------------------------------
 
 
-def _get_tag_level(conn, tag_id):
-    """Calculate the hierarchy level of a tag (0 = root)."""
-    level = 0
-    current_id = tag_id
-    visited = set()
-    while current_id is not None:
-        if current_id in visited:
-            break
-        visited.add(current_id)
-        row = conn.execute("SELECT parent_id FROM tags WHERE id = ?", (current_id,)).fetchone()
-        if not row or row["parent_id"] is None:
-            break
-        current_id = row["parent_id"]
-        level += 1
-    return level
+def _calc_level(conn, parent_id):
+    """Calculate the level for a tag given its parent_id. Root = 0."""
+    if parent_id is None:
+        return 0
+    row = conn.execute("SELECT level FROM tags WHERE id = ?", (parent_id,)).fetchone()
+    if not row:
+        return 0
+    return row["level"] + 1
+
+
+def _update_descendant_levels(conn, tag_id):
+    """Recursively update levels for all descendants of a tag."""
+    row = conn.execute("SELECT level FROM tags WHERE id = ?", (tag_id,)).fetchone()
+    if not row:
+        return
+    parent_level = row["level"]
+    children = conn.execute("SELECT id FROM tags WHERE parent_id = ?", (tag_id,)).fetchall()
+    for child in children:
+        conn.execute(
+            "UPDATE tags SET level = ? WHERE id = ?",
+            (parent_level + 1, child["id"]),
+        )
+        _update_descendant_levels(conn, child["id"])
 
 
 def _build_tag_dict(row, count=None):
@@ -41,19 +49,11 @@ def _build_tag_dict(row, count=None):
         "name": row["name"],
         "display_name": row["display_name"],
         "parent_id": row["parent_id"],
+        "level": row["level"],
     }
     if count is not None:
         d["count"] = count
     return d
-
-
-def _ensure_tag_exists(conn, tag_name):
-    """Ensure a tag exists in the tags table, creating it if needed. Returns tag id."""
-    row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
-    if row:
-        return row["id"]
-    cursor = conn.execute("INSERT INTO tags (name) VALUES (?)", (tag_name,))
-    return cursor.lastrowid
 
 
 def cmd_tag_create(data_json):
@@ -80,9 +80,10 @@ def cmd_tag_create(data_json):
             print(json.dumps({"status": "error", "message": f"Parent tag not found: {parent_id}"}))
             return
 
+    level = _calc_level(conn, parent_id)
     cursor = conn.execute(
-        "INSERT INTO tags (name, display_name, parent_id) VALUES (?, ?, ?)",
-        (name, data.get("display_name", ""), parent_id),
+        "INSERT INTO tags (name, display_name, parent_id, level) VALUES (?, ?, ?, ?)",
+        (name, data.get("display_name", ""), parent_id, level),
     )
     conn.commit()
     tag_id = cursor.lastrowid
@@ -135,13 +136,16 @@ def cmd_tag_update(tag_id, update_json):
     set_clauses = []
     params = []
     new_name = None
+    parent_changed = False
 
     for field in ("name", "display_name", "parent_id"):
         if field in updates:
             set_clauses.append(f"{field} = ?")
             val = updates[field]
-            if field == "parent_id" and val is not None:
-                val = int(val)
+            if field == "parent_id":
+                if val is not None:
+                    val = int(val)
+                parent_changed = True
             params.append(val)
             if field == "name":
                 new_name = val
@@ -151,9 +155,22 @@ def cmd_tag_update(tag_id, update_json):
         print(json.dumps({"status": "error", "message": "No valid fields to update"}))
         return
 
+    # Recalculate level if parent changed
+    if parent_changed:
+        new_parent_id = updates["parent_id"]
+        if new_parent_id is not None:
+            new_parent_id = int(new_parent_id)
+        new_level = _calc_level(conn, new_parent_id)
+        set_clauses.append("level = ?")
+        params.append(new_level)
+
     set_clauses.append("updated_at = datetime('now', 'localtime')")
     params.append(tag_id)
     conn.execute(f"UPDATE tags SET {', '.join(set_clauses)} WHERE id = ?", params)
+
+    # If parent changed, update descendant levels
+    if parent_changed:
+        _update_descendant_levels(conn, tag_id)
 
     # If name changed, update collection_item_tags references
     if new_name and new_name != old_name:
@@ -207,7 +224,6 @@ def cmd_tag_get(tag_id):
     ).fetchone()
 
     d = _build_tag_dict(row, count=count_row["count"])
-    d["level"] = _get_tag_level(conn, tag_id)
 
     # Include parent info
     if row["parent_id"]:
@@ -247,7 +263,6 @@ def cmd_tags_list():
     result = []
     for row in tag_rows:
         d = _build_tag_dict(row, count=count_map.get(row["name"], 0))
-        d["level"] = _get_tag_level(conn, row["id"])
         result.append(d)
 
     conn.close()
@@ -260,7 +275,9 @@ def cmd_tags_list_level(level):
     conn = get_connection()
     ensure_schema(conn)
 
-    tag_rows = conn.execute("SELECT * FROM tags ORDER BY name").fetchall()
+    tag_rows = conn.execute(
+        "SELECT * FROM tags WHERE level = ? ORDER BY name", (level,)
+    ).fetchall()
 
     count_rows = conn.execute(
         "SELECT tag, COUNT(*) as count FROM collection_item_tags GROUP BY tag"
@@ -269,19 +286,16 @@ def cmd_tags_list_level(level):
 
     result = []
     for row in tag_rows:
-        tag_level = _get_tag_level(conn, row["id"])
-        if tag_level == level:
-            d = _build_tag_dict(row, count=count_map.get(row["name"], 0))
-            d["level"] = tag_level
-            # Include children info
-            children = conn.execute(
-                "SELECT * FROM tags WHERE parent_id = ? ORDER BY name", (row["id"],)
-            ).fetchall()
-            d["children"] = [
-                _build_tag_dict(c, count=count_map.get(c["name"], 0))
-                for c in children
-            ]
-            result.append(d)
+        d = _build_tag_dict(row, count=count_map.get(row["name"], 0))
+        # Include children info
+        children = conn.execute(
+            "SELECT * FROM tags WHERE parent_id = ? ORDER BY name", (row["id"],)
+        ).fetchall()
+        d["children"] = [
+            _build_tag_dict(c, count=count_map.get(c["name"], 0))
+            for c in children
+        ]
+        result.append(d)
 
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))

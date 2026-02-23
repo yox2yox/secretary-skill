@@ -48,11 +48,13 @@ CREATE TABLE IF NOT EXISTS tags (
     name TEXT UNIQUE NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
+    level INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 CREATE INDEX IF NOT EXISTS idx_tags_parent_id ON tags(parent_id);
+CREATE INDEX IF NOT EXISTS idx_tags_level ON tags(level);
 
 CREATE TABLE IF NOT EXISTS collection_item_tags (
     item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
@@ -194,6 +196,21 @@ def get_connection():
     return conn
 
 
+def _recalc_tag_levels(conn):
+    """Recalculate level for all tags based on parent_id chain."""
+    rows = conn.execute("SELECT id, parent_id FROM tags").fetchall()
+    parent_map = {r["id"]: r["parent_id"] for r in rows}
+    for tag_id in parent_map:
+        level = 0
+        current = parent_map.get(tag_id)
+        visited = set()
+        while current is not None and current not in visited:
+            visited.add(current)
+            level += 1
+            current = parent_map.get(current)
+        conn.execute("UPDATE tags SET level = ? WHERE id = ?", (level, tag_id))
+
+
 def _migrate(conn):
     """Run all necessary migrations for existing databases."""
     tables = {row[0] for row in conn.execute(
@@ -243,10 +260,6 @@ def _migrate(conn):
                 conn.execute("UPDATE collections SET type = ? WHERE id = ?", (type_name, row[0]))
             conn.commit()
 
-    # Populate tags table from existing collection_item_tags
-    if "collection_item_tags" in tables and "tags" not in tables:
-        # tags table will be created by ensure_schema before _migrate is called
-        pass
     # After schema creation, ensure all tags in collection_item_tags have entries in tags table
     tags_table_exists = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='tags'"
@@ -257,6 +270,12 @@ def _migrate(conn):
                SELECT DISTINCT tag FROM collection_item_tags
                WHERE tag NOT IN (SELECT name FROM tags)"""
         )
+        # Migrate: add level column if missing
+        tag_cols = {row[1] for row in conn.execute("PRAGMA table_info(tags)").fetchall()}
+        if "level" not in tag_cols:
+            conn.execute("ALTER TABLE tags ADD COLUMN level INTEGER NOT NULL DEFAULT 0")
+        # Recalculate levels for all tags
+        _recalc_tag_levels(conn)
         conn.commit()
 
     # Remove type column from collection_items if present (items now inherit from collection)
