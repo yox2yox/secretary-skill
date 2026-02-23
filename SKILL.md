@@ -396,12 +396,54 @@ python3 SCRIPT type_set '{
 
 ## タグ（tags）
 
-タグは検索・分類用のラベルです。1アイテムに複数付けることができます。
-タイプとは独立した概念で、`collection_item_tags` テーブルに保存されます。
+タグは検索・分類用の**階層構造を持つラベル**です。1アイテムに複数付けることができます。
+タイプとは独立した概念で、`tags` テーブルで管理され、`collection_item_tags` テーブルで
+アイテムに紐付けられます。
 
-**全タグを一覧表示：**
+各タグは `parent_id` を持ち、親子関係によるツリー構造を形成できます。
+例：`work` → `work/frontend` → `work/frontend/react` のような階層を表現できます。
+
+### タグの作成（階層構造の構築）
+
 ```bash
+# ルートタグを作成
+python3 SCRIPT tag_create '{"name": "work", "display_name": "仕事"}'
+
+# 子タグを作成（parent_idで親を指定）
+python3 SCRIPT tag_create '{"name": "work-frontend", "display_name": "フロントエンド", "parent_id": 1}'
+python3 SCRIPT tag_create '{"name": "work-backend", "display_name": "バックエンド", "parent_id": 1}'
+
+# さらに深い階層
+python3 SCRIPT tag_create '{"name": "work-frontend-react", "display_name": "React", "parent_id": 2}'
+```
+
+### タグの取得・更新・削除
+
+```bash
+# タグの詳細を取得（子タグ情報付き）
+python3 SCRIPT tag_get <tag_id>
+
+# タグを更新（名前、表示名、親の変更）
+python3 SCRIPT tag_update <tag_id> '{"display_name": "新しい表示名"}'
+python3 SCRIPT tag_update <tag_id> '{"parent_id": 5}'
+python3 SCRIPT tag_update <tag_id> '{"parent_id": null}'  # ルートに移動
+
+# タグを削除（子タグのparent_idはnullになる）
+python3 SCRIPT tag_delete <tag_id>
+```
+
+### タグの一覧表示
+
+```bash
+# 全タグを一覧表示（階層情報・使用数付き）
 python3 SCRIPT tags_list
+
+# 特定の階層レベルのタグを一覧表示（0=ルート、1=第1階層、...）
+python3 SCRIPT tags_list_level 0    # ルートタグのみ
+python3 SCRIPT tags_list_level 1    # 第1階層のタグのみ
+
+# ツリー構造で全タグを表示
+python3 SCRIPT tags_tree
 ```
 
 ### タグの命名規則
@@ -410,6 +452,7 @@ python3 SCRIPT tags_list
 2. 複数語のタグにはハイフン区切りの小文字を使用：`project-alpha`、`team-lead`
 3. 技術的・汎用的な用語には英語を推奨：`frontend`、`backend`、`meeting`
 4. 日本固有の概念には日本語も可：`経理`、`総務`
+5. 階層関係がある場合は `tag_create` で `parent_id` を指定して親子関係を構築してください
 
 ## レスポンスガイドライン
 

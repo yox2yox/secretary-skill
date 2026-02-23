@@ -43,12 +43,25 @@ CREATE INDEX IF NOT EXISTS idx_collection_items_parent_id ON collection_items(pa
 CREATE INDEX IF NOT EXISTS idx_collection_items_status ON collection_items(status);
 CREATE INDEX IF NOT EXISTS idx_collection_items_collection_status ON collection_items(collection_id, status);
 
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
+    level INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+CREATE INDEX IF NOT EXISTS idx_tags_parent_id ON tags(parent_id);
+CREATE INDEX IF NOT EXISTS idx_tags_level ON tags(level);
+
 CREATE TABLE IF NOT EXISTS collection_item_tags (
     item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
-    tag TEXT NOT NULL,
-    PRIMARY KEY (item_id, tag)
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, tag_id)
 );
-CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag ON collection_item_tags(tag);
+CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag_id ON collection_item_tags(tag_id);
 """
 
 FTS_SQL = """
@@ -183,6 +196,21 @@ def get_connection():
     return conn
 
 
+def _recalc_tag_levels(conn):
+    """Recalculate level for all tags based on parent_id chain."""
+    rows = conn.execute("SELECT id, parent_id FROM tags").fetchall()
+    parent_map = {r["id"]: r["parent_id"] for r in rows}
+    for tag_id in parent_map:
+        level = 0
+        current = parent_map.get(tag_id)
+        visited = set()
+        while current is not None and current not in visited:
+            visited.add(current)
+            level += 1
+            current = parent_map.get(current)
+        conn.execute("UPDATE tags SET level = ? WHERE id = ?", (level, tag_id))
+
+
 def _migrate(conn):
     """Run all necessary migrations for existing databases."""
     tables = {row[0] for row in conn.execute(
@@ -231,6 +259,41 @@ def _migrate(conn):
                     )
                 conn.execute("UPDATE collections SET type = ? WHERE id = ?", (type_name, row[0]))
             conn.commit()
+
+    # Migrate tags table: add level column if missing
+    if "tags" in tables:
+        tag_cols = {row[1] for row in conn.execute("PRAGMA table_info(tags)").fetchall()}
+        if "level" not in tag_cols:
+            conn.execute("ALTER TABLE tags ADD COLUMN level INTEGER NOT NULL DEFAULT 0")
+        _recalc_tag_levels(conn)
+        conn.commit()
+
+    # Migrate collection_item_tags: tag TEXT -> tag_id INTEGER FK
+    if "collection_item_tags" in tables:
+        cit_cols = {row[1] for row in conn.execute("PRAGMA table_info(collection_item_tags)").fetchall()}
+        if "tag" in cit_cols and "tag_id" not in cit_cols:
+            # Ensure all referenced tag names exist in tags table
+            conn.execute(
+                """INSERT OR IGNORE INTO tags (name)
+                   SELECT DISTINCT tag FROM collection_item_tags
+                   WHERE tag NOT IN (SELECT name FROM tags)"""
+            )
+            conn.commit()
+            # Recreate table with tag_id FK
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS collection_item_tags_new (
+                    item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
+                    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    PRIMARY KEY (item_id, tag_id)
+                );
+                INSERT OR IGNORE INTO collection_item_tags_new (item_id, tag_id)
+                    SELECT cit.item_id, t.id
+                    FROM collection_item_tags cit
+                    JOIN tags t ON t.name = cit.tag;
+                DROP TABLE collection_item_tags;
+                ALTER TABLE collection_item_tags_new RENAME TO collection_item_tags;
+                CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag_id ON collection_item_tags(tag_id);
+            """)
 
     # Remove type column from collection_items if present (items now inherit from collection)
     if "collection_items" in tables:

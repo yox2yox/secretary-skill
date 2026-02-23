@@ -21,7 +21,13 @@ Commands:
     item_delete <id>                      Delete an item
     item_list <col_id> ['<json_filter>']  List items in a collection
     item_search '<keyword>' [col_id]      Search items
-    tags_list                             List all tags
+    tag_create '<json>'                   Create a tag (with optional parent_id)
+    tag_update <id> '<json>'              Update a tag
+    tag_delete <id>                       Delete a tag
+    tag_get <id>                          Get tag details with children
+    tags_list                             List all tags with hierarchy info
+    tags_list_level <level>               List tags at a specific hierarchy level
+    tags_tree                             List all tags as a tree structure
     type_set '<json>'                     Define a type
     type_get <name>                       Get a type definition
     type_list                             List all types
@@ -42,8 +48,9 @@ from collections_mod import (
     cmd_item_delete, cmd_item_list, cmd_item_search,
 )
 from tags import (
-    cmd_tags_list, cmd_type_set, cmd_type_get,
-    cmd_type_list, cmd_type_delete,
+    cmd_tag_create, cmd_tag_update, cmd_tag_delete, cmd_tag_get,
+    cmd_tags_list, cmd_tags_list_level, cmd_tags_tree,
+    cmd_type_set, cmd_type_get, cmd_type_list, cmd_type_delete,
 )
 
 
@@ -54,7 +61,9 @@ def main():
         print("         col_create, col_list, col_get, col_update, col_delete,")
         print("         item_add, item_add_batch, item_get, item_update, item_delete,")
         print("         item_list, item_search,")
-        print("         tags_list, type_set, type_get, type_list, type_delete")
+        print("         tag_create, tag_update, tag_delete, tag_get,")
+        print("         tags_list, tags_list_level, tags_tree,")
+        print("         type_set, type_get, type_list, type_delete")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -88,9 +97,21 @@ def main():
             cmd_item_list(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
         elif command == "item_search":
             cmd_item_search(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
-        # Tag listing
+        # Tag commands
+        elif command == "tag_create":
+            cmd_tag_create(sys.argv[2])
+        elif command == "tag_update":
+            cmd_tag_update(sys.argv[2], sys.argv[3])
+        elif command == "tag_delete":
+            cmd_tag_delete(sys.argv[2])
+        elif command == "tag_get":
+            cmd_tag_get(sys.argv[2])
         elif command == "tags_list":
             cmd_tags_list()
+        elif command == "tags_list_level":
+            cmd_tags_list_level(sys.argv[2])
+        elif command == "tags_tree":
+            cmd_tags_tree()
         # Type commands
         elif command == "type_set":
             cmd_type_set(sys.argv[2])
