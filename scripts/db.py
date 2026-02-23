@@ -58,10 +58,10 @@ CREATE INDEX IF NOT EXISTS idx_tags_level ON tags(level);
 
 CREATE TABLE IF NOT EXISTS collection_item_tags (
     item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
-    tag TEXT NOT NULL,
-    PRIMARY KEY (item_id, tag)
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, tag_id)
 );
-CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag ON collection_item_tags(tag);
+CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag_id ON collection_item_tags(tag_id);
 """
 
 FTS_SQL = """
@@ -260,23 +260,40 @@ def _migrate(conn):
                 conn.execute("UPDATE collections SET type = ? WHERE id = ?", (type_name, row[0]))
             conn.commit()
 
-    # After schema creation, ensure all tags in collection_item_tags have entries in tags table
-    tags_table_exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='tags'"
-    ).fetchone()
-    if tags_table_exists:
-        conn.execute(
-            """INSERT OR IGNORE INTO tags (name)
-               SELECT DISTINCT tag FROM collection_item_tags
-               WHERE tag NOT IN (SELECT name FROM tags)"""
-        )
-        # Migrate: add level column if missing
+    # Migrate tags table: add level column if missing
+    if "tags" in tables:
         tag_cols = {row[1] for row in conn.execute("PRAGMA table_info(tags)").fetchall()}
         if "level" not in tag_cols:
             conn.execute("ALTER TABLE tags ADD COLUMN level INTEGER NOT NULL DEFAULT 0")
-        # Recalculate levels for all tags
         _recalc_tag_levels(conn)
         conn.commit()
+
+    # Migrate collection_item_tags: tag TEXT -> tag_id INTEGER FK
+    if "collection_item_tags" in tables:
+        cit_cols = {row[1] for row in conn.execute("PRAGMA table_info(collection_item_tags)").fetchall()}
+        if "tag" in cit_cols and "tag_id" not in cit_cols:
+            # Ensure all referenced tag names exist in tags table
+            conn.execute(
+                """INSERT OR IGNORE INTO tags (name)
+                   SELECT DISTINCT tag FROM collection_item_tags
+                   WHERE tag NOT IN (SELECT name FROM tags)"""
+            )
+            conn.commit()
+            # Recreate table with tag_id FK
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS collection_item_tags_new (
+                    item_id INTEGER NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
+                    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    PRIMARY KEY (item_id, tag_id)
+                );
+                INSERT OR IGNORE INTO collection_item_tags_new (item_id, tag_id)
+                    SELECT cit.item_id, t.id
+                    FROM collection_item_tags cit
+                    JOIN tags t ON t.name = cit.tag;
+                DROP TABLE collection_item_tags;
+                ALTER TABLE collection_item_tags_new RENAME TO collection_item_tags;
+                CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag_id ON collection_item_tags(tag_id);
+            """)
 
     # Remove type column from collection_items if present (items now inherit from collection)
     if "collection_items" in tables:

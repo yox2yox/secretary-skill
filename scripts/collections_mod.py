@@ -8,11 +8,12 @@ from db import get_connection, ensure_schema, seed_default_collections, parse_ta
 def _save_item_tags(conn, item_id, tags):
     """Save tags for a collection item. Also ensures each tag exists in the tags table."""
     for tag in tags:
-        # Ensure tag exists in the tags table
+        # Ensure tag exists in the tags table and get its id
         conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+        row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()
         conn.execute(
-            "INSERT OR IGNORE INTO collection_item_tags (item_id, tag) VALUES (?, ?)",
-            (item_id, tag),
+            "INSERT OR IGNORE INTO collection_item_tags (item_id, tag_id) VALUES (?, ?)",
+            (item_id, row["id"]),
         )
 
 
@@ -33,7 +34,11 @@ def _enrich_items(conn, items):
 
     # Tags
     tag_rows = conn.execute(
-        f"SELECT item_id, tag FROM collection_item_tags WHERE item_id IN ({placeholders}) ORDER BY item_id, tag",
+        f"""SELECT cit.item_id, t.name AS tag
+            FROM collection_item_tags cit
+            JOIN tags t ON t.id = cit.tag_id
+            WHERE cit.item_id IN ({placeholders})
+            ORDER BY cit.item_id, t.name""",
         item_ids,
     ).fetchall()
     tags_map = {}
@@ -397,7 +402,9 @@ def cmd_item_list(collection_id, filter_json=None):
             params.append(int(filters["parent_id"]))
     if "tag" in filters:
         where_clauses.append(
-            "EXISTS (SELECT 1 FROM collection_item_tags t WHERE t.item_id = ci.id AND t.tag = ?)"
+            """EXISTS (SELECT 1 FROM collection_item_tags cit
+                       JOIN tags tg ON tg.id = cit.tag_id
+                       WHERE cit.item_id = ci.id AND tg.name = ?)"""
         )
         params.append(filters["tag"])
 

@@ -6,7 +6,7 @@ All items in a collection share the same type (and thus the same fields_schema).
 
 Tags are hierarchical labels for search/categorization. Each tag can have a
 parent_id to form a tree structure. Tags are defined in the 'tags' table and
-referenced by name in 'collection_item_tags'.
+referenced by tag_id (foreign key) in 'collection_item_tags'.
 """
 
 import json
@@ -105,8 +105,6 @@ def cmd_tag_update(tag_id, update_json):
         print(json.dumps({"status": "error", "message": f"Tag not found: {tag_id}"}))
         return
 
-    old_name = row["name"]
-
     # Validate parent_id if being changed
     if "parent_id" in updates:
         new_parent_id = updates["parent_id"]
@@ -135,7 +133,6 @@ def cmd_tag_update(tag_id, update_json):
 
     set_clauses = []
     params = []
-    new_name = None
     parent_changed = False
 
     for field in ("name", "display_name", "parent_id"):
@@ -147,8 +144,6 @@ def cmd_tag_update(tag_id, update_json):
                     val = int(val)
                 parent_changed = True
             params.append(val)
-            if field == "name":
-                new_name = val
 
     if not set_clauses:
         conn.close()
@@ -172,13 +167,6 @@ def cmd_tag_update(tag_id, update_json):
     if parent_changed:
         _update_descendant_levels(conn, tag_id)
 
-    # If name changed, update collection_item_tags references
-    if new_name and new_name != old_name:
-        conn.execute(
-            "UPDATE collection_item_tags SET tag = ? WHERE tag = ?",
-            (new_name, old_name),
-        )
-
     conn.commit()
     conn.close()
     print(json.dumps({"status": "ok", "id": tag_id}))
@@ -197,9 +185,8 @@ def cmd_tag_delete(tag_id):
         return
 
     tag_name = row["name"]
-    # Remove tag from collection_item_tags
-    conn.execute("DELETE FROM collection_item_tags WHERE tag = ?", (tag_name,))
-    # Delete the tag (children's parent_id will be SET NULL via FK)
+    # collection_item_tags rows are removed automatically via ON DELETE CASCADE
+    # children's parent_id will be SET NULL via FK
     conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
     conn.commit()
     conn.close()
@@ -219,8 +206,8 @@ def cmd_tag_get(tag_id):
         return
 
     count_row = conn.execute(
-        "SELECT COUNT(*) as count FROM collection_item_tags WHERE tag = ?",
-        (row["name"],),
+        "SELECT COUNT(*) as count FROM collection_item_tags WHERE tag_id = ?",
+        (tag_id,),
     ).fetchone()
 
     d = _build_tag_dict(row, count=count_row["count"])
@@ -238,8 +225,8 @@ def cmd_tag_get(tag_id):
     d["children"] = []
     for child in children_rows:
         c_count = conn.execute(
-            "SELECT COUNT(*) as count FROM collection_item_tags WHERE tag = ?",
-            (child["name"],),
+            "SELECT COUNT(*) as count FROM collection_item_tags WHERE tag_id = ?",
+            (child["id"],),
         ).fetchone()
         d["children"].append(_build_tag_dict(child, count=c_count["count"]))
 
@@ -256,13 +243,13 @@ def cmd_tags_list():
 
     # Get usage counts for all tags
     count_rows = conn.execute(
-        "SELECT tag, COUNT(*) as count FROM collection_item_tags GROUP BY tag"
+        "SELECT tag_id, COUNT(*) as count FROM collection_item_tags GROUP BY tag_id"
     ).fetchall()
-    count_map = {r["tag"]: r["count"] for r in count_rows}
+    count_map = {r["tag_id"]: r["count"] for r in count_rows}
 
     result = []
     for row in tag_rows:
-        d = _build_tag_dict(row, count=count_map.get(row["name"], 0))
+        d = _build_tag_dict(row, count=count_map.get(row["id"], 0))
         result.append(d)
 
     conn.close()
@@ -280,19 +267,19 @@ def cmd_tags_list_level(level):
     ).fetchall()
 
     count_rows = conn.execute(
-        "SELECT tag, COUNT(*) as count FROM collection_item_tags GROUP BY tag"
+        "SELECT tag_id, COUNT(*) as count FROM collection_item_tags GROUP BY tag_id"
     ).fetchall()
-    count_map = {r["tag"]: r["count"] for r in count_rows}
+    count_map = {r["tag_id"]: r["count"] for r in count_rows}
 
     result = []
     for row in tag_rows:
-        d = _build_tag_dict(row, count=count_map.get(row["name"], 0))
+        d = _build_tag_dict(row, count=count_map.get(row["id"], 0))
         # Include children info
         children = conn.execute(
             "SELECT * FROM tags WHERE parent_id = ? ORDER BY name", (row["id"],)
         ).fetchall()
         d["children"] = [
-            _build_tag_dict(c, count=count_map.get(c["name"], 0))
+            _build_tag_dict(c, count=count_map.get(c["id"], 0))
             for c in children
         ]
         result.append(d)
@@ -309,9 +296,9 @@ def cmd_tags_tree():
     tag_rows = conn.execute("SELECT * FROM tags ORDER BY name").fetchall()
 
     count_rows = conn.execute(
-        "SELECT tag, COUNT(*) as count FROM collection_item_tags GROUP BY tag"
+        "SELECT tag_id, COUNT(*) as count FROM collection_item_tags GROUP BY tag_id"
     ).fetchall()
-    count_map = {r["tag"]: r["count"] for r in count_rows}
+    count_map = {r["tag_id"]: r["count"] for r in count_rows}
 
     # Build tree from root nodes
     tags_by_id = {}
@@ -319,7 +306,7 @@ def cmd_tags_tree():
         tags_by_id[row["id"]] = dict(row)
 
     def build_node(row):
-        d = _build_tag_dict(row, count=count_map.get(row["name"], 0))
+        d = _build_tag_dict(row, count=count_map.get(row["id"], 0))
         children = [r for r in tag_rows if r["parent_id"] == row["id"]]
         d["children"] = [build_node(c) for c in sorted(children, key=lambda x: x["name"])]
         return d
