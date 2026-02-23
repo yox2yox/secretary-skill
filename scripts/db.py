@@ -7,17 +7,6 @@ DB_DIR = os.path.expanduser("~/.secretary")
 DB_PATH = os.path.join(DB_DIR, "data.db")
 
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS collections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
-    display_name TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    fields_schema TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name);
-
 CREATE TABLE IF NOT EXISTS types (
     name TEXT PRIMARY KEY,
     display_name TEXT NOT NULL DEFAULT '',
@@ -27,10 +16,20 @@ CREATE TABLE IF NOT EXISTS types (
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    type TEXT REFERENCES types(name) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name);
+
 CREATE TABLE IF NOT EXISTS collection_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-    type TEXT REFERENCES types(name) ON DELETE SET NULL,
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     data TEXT NOT NULL DEFAULT '{}',
@@ -72,9 +71,9 @@ END;
 """
 
 
-DEFAULT_COLLECTIONS = [
+DEFAULT_TYPES = [
     {
-        "name": "persons",
+        "name": "person",
         "display_name": "人物",
         "description": "ユーザー（オーナー）と周囲の人々のプロフィール",
         "fields_schema": [
@@ -93,7 +92,7 @@ DEFAULT_COLLECTIONS = [
         ],
     },
     {
-        "name": "events",
+        "name": "event",
         "display_name": "イベント",
         "description": "起こった出来事や進行中の出来事",
         "fields_schema": [
@@ -106,7 +105,7 @@ DEFAULT_COLLECTIONS = [
         ],
     },
     {
-        "name": "plans",
+        "name": "plan",
         "display_name": "計画",
         "description": "将来の予定された活動",
         "fields_schema": [
@@ -122,7 +121,7 @@ DEFAULT_COLLECTIONS = [
         ],
     },
     {
-        "name": "goals",
+        "name": "goal",
         "display_name": "目標",
         "description": "目標と抱負",
         "fields_schema": [
@@ -132,7 +131,7 @@ DEFAULT_COLLECTIONS = [
         ],
     },
     {
-        "name": "tasks",
+        "name": "task",
         "display_name": "タスク",
         "description": "実行すべきアクション項目",
         "fields_schema": [
@@ -143,7 +142,7 @@ DEFAULT_COLLECTIONS = [
         ],
     },
     {
-        "name": "decisions",
+        "name": "decision",
         "display_name": "決定事項",
         "description": "決定済みまたは保留中の決定事項",
         "fields_schema": [
@@ -153,7 +152,7 @@ DEFAULT_COLLECTIONS = [
         ],
     },
     {
-        "name": "notes",
+        "name": "note",
         "display_name": "メモ",
         "description": "記憶しておく価値のある一般的な情報",
         "fields_schema": [
@@ -161,6 +160,16 @@ DEFAULT_COLLECTIONS = [
             {"name": "source", "type": "string", "description": "情報の出所"},
         ],
     },
+]
+
+DEFAULT_COLLECTIONS = [
+    {"name": "persons", "display_name": "人物", "description": "ユーザー（オーナー）と周囲の人々のプロフィール", "type": "person"},
+    {"name": "events", "display_name": "イベント", "description": "起こった出来事や進行中の出来事", "type": "event"},
+    {"name": "plans", "display_name": "計画", "description": "将来の予定された活動", "type": "plan"},
+    {"name": "goals", "display_name": "目標", "description": "目標と抱負", "type": "goal"},
+    {"name": "tasks", "display_name": "タスク", "description": "実行すべきアクション項目", "type": "task"},
+    {"name": "decisions", "display_name": "決定事項", "description": "決定済みまたは保留中の決定事項", "type": "decision"},
+    {"name": "notes", "display_name": "メモ", "description": "記憶しておく価値のある一般的な情報", "type": "note"},
 ]
 
 
@@ -199,11 +208,52 @@ def _migrate(conn):
         )
         conn.execute("DROP TABLE tag_schemas")
 
-    # Add type column to collection_items if missing
+    # Migrate: move fields_schema from collections to types, add type FK to collections
+    if "collections" in tables:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(collections)").fetchall()}
+        if "fields_schema" in cols and "type" not in cols:
+            # Add type column to collections
+            conn.execute("ALTER TABLE collections ADD COLUMN type TEXT REFERENCES types(name) ON DELETE SET NULL")
+            # Migrate each collection's fields_schema into a type
+            import json as _json
+            rows = conn.execute("SELECT id, name, display_name, description, fields_schema FROM collections").fetchall()
+            for row in rows:
+                col_name = row[1]
+                # Use singular form for type name (strip trailing 's' as heuristic)
+                type_name = col_name.rstrip("s") if col_name.endswith("s") else col_name
+                fs = row[4] or "[]"
+                existing_type = conn.execute("SELECT 1 FROM types WHERE name = ?", (type_name,)).fetchone()
+                if not existing_type:
+                    conn.execute(
+                        """INSERT INTO types (name, display_name, description, fields_schema)
+                           VALUES (?, ?, ?, ?)""",
+                        (type_name, row[2], row[3], fs),
+                    )
+                conn.execute("UPDATE collections SET type = ? WHERE id = ?", (type_name, row[0]))
+            conn.commit()
+
+    # Remove type column from collection_items if present (items now inherit from collection)
     if "collection_items" in tables:
-        cols = [row[1] for row in conn.execute("PRAGMA table_info(collection_items)").fetchall()]
-        if "type" not in cols:
-            conn.execute("ALTER TABLE collection_items ADD COLUMN type TEXT REFERENCES types(name) ON DELETE SET NULL")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(collection_items)").fetchall()}
+        if "type" in cols:
+            # SQLite doesn't support DROP COLUMN before 3.35.0; recreate table
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS collection_items_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    data TEXT NOT NULL DEFAULT '{}',
+                    parent_id INTEGER REFERENCES collection_items_new(id) ON DELETE SET NULL,
+                    status TEXT DEFAULT 'active',
+                    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+                );
+                INSERT INTO collection_items_new (id, collection_id, title, content, data, parent_id, status, created_at, updated_at)
+                    SELECT id, collection_id, title, content, data, parent_id, status, created_at, updated_at FROM collection_items;
+                DROP TABLE collection_items;
+                ALTER TABLE collection_items_new RENAME TO collection_items;
+            """)
 
 
 def ensure_schema(conn):
@@ -218,8 +268,19 @@ def ensure_schema(conn):
 
 
 def seed_default_collections(conn):
-    """Insert default collections if they don't already exist."""
+    """Insert default types and collections if they don't already exist."""
     import json as _json
+
+    for t in DEFAULT_TYPES:
+        existing = conn.execute("SELECT 1 FROM types WHERE name = ?", (t["name"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            """INSERT INTO types (name, display_name, description, fields_schema)
+               VALUES (?, ?, ?, ?)""",
+            (t["name"], t["display_name"], t["description"],
+             _json.dumps(t["fields_schema"], ensure_ascii=False)),
+        )
 
     for col in DEFAULT_COLLECTIONS:
         existing = conn.execute(
@@ -228,14 +289,9 @@ def seed_default_collections(conn):
         if existing:
             continue
         conn.execute(
-            """INSERT INTO collections (name, display_name, description, fields_schema)
+            """INSERT INTO collections (name, display_name, description, type)
                VALUES (?, ?, ?, ?)""",
-            (
-                col["name"],
-                col["display_name"],
-                col["description"],
-                _json.dumps(col["fields_schema"], ensure_ascii=False),
-            ),
+            (col["name"], col["display_name"], col["description"], col["type"]),
         )
     conn.commit()
 
