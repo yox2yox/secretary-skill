@@ -92,9 +92,20 @@ def _extract_refs(conn, type_name, item_data):
     return cleaned, relations
 
 
-def _save_relations(conn, item_id, relations):
-    """Save item relations to the item_relations table."""
+def _save_relations(conn, item_id, relations, type_name):
+    """Save item relations to the item_relations table.
+
+    Validates that each field_name is a ref field defined in the type's
+    fields_schema. Raises ValueError if an undefined field_name is used.
+    """
+    if not relations:
+        return
+    ref_fields = get_ref_fields(conn, type_name) if type_name else {}
     for related_id, field_name in relations:
+        if field_name not in ref_fields:
+            raise ValueError(
+                f"'{field_name}' is not a ref field defined in type '{type_name}'"
+            )
         conn.execute(
             "INSERT OR IGNORE INTO item_relations (item_id, related_item_id, field_name) VALUES (?, ?, ?)",
             (item_id, related_id, field_name),
@@ -130,7 +141,7 @@ def _insert_item(conn, data):
     item_id = cursor.lastrowid
 
     # Save relations
-    _save_relations(conn, item_id, relations)
+    _save_relations(conn, item_id, relations, type_name)
 
     return item_id
 
@@ -284,7 +295,7 @@ def cmd_item_update(item_id, update_json):
                     "DELETE FROM item_relations WHERE item_id = ? AND field_name = ?",
                     (iid, fname),
                 )
-            _save_relations(conn, iid, relations)
+            _save_relations(conn, iid, relations, type_name)
 
         set_clauses.append("data = ?")
         params.append(d)
