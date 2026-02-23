@@ -1,14 +1,14 @@
 ---
 name: secretary
 description: >
-  個人秘書スキル。すべてのデータを動的コレクションとして管理するSQLiteベースの
-  情報管理システムです。イベント、計画、目標、タスク、人物、組織図、プロジェクトなど、
-  あらゆる種類の構造化データをコレクションとして定義し、アイテムとして保存・検索します。
-  データ間の関係はアイテムのJSONデータフィールド内でIDにより参照します。
-  ユーザーが日常の活動報告、イベント記録、目標設定、将来のタスク計画、保存された情報への
-  質問、個人・連絡先プロフィールの管理、構造化ドメインデータの保存・検索を行う際に
-  このスキルを使用してください。ユーザーがサマリー、スケジュール、目標や計画の
-  ステータスを求めた場合にもトリガーされます。
+  個人秘書スキル。すべてのデータをアイテムとして管理するSQLiteベースの
+  情報管理システムです。各アイテムはタイプ（スキーマ定義）とタグ（分類ラベル）を
+  持ち、イベント、計画、目標、タスク、人物など、あらゆる種類の構造化データを
+  保存・検索します。データ間の関係はアイテムのJSONデータフィールド内でIDにより
+  参照します。ユーザーが日常の活動報告、イベント記録、目標設定、将来のタスク計画、
+  保存された情報への質問、個人・連絡先プロフィールの管理、構造化ドメインデータの
+  保存・検索を行う際にこのスキルを使用してください。ユーザーがサマリー、スケジュール、
+  目標や計画のステータスを求めた場合にもトリガーされます。
 allowed-tools: Bash
 ---
 
@@ -19,14 +19,14 @@ allowed-tools: Bash
 
 ## アーキテクチャ
 
-すべてのデータは**タイプ**、**コレクション**、**アイテム**で管理されます。
+すべてのデータは**タイプ**、**アイテム**、**タグ**で管理されます。
 
 - **タイプ**: データのスキーマ（フィールド定義）を持つ型定義（例: person, event, task）
-- **コレクション**: タイプを紐付けたデータの器（例: persons, events, tasks）
-- **アイテム**: コレクション内の個々のデータレコード。コレクションのタイプに従う
+- **アイテム**: 個々のデータレコード。タイプを直接持ち、タグで分類される
+- **タグ**: 階層構造を持つ分類ラベル。1アイテムに複数付与可能
 - **リレーション**: アイテムの `data` JSONフィールド内にIDで他のアイテムを参照
 
-固定テーブルはありません。タイプとコレクションを動的に作成できます。
+固定テーブルはありません。タイプを動的に作成でき、アイテムにタイプとタグを紐付けます。
 
 ## スクリプトの場所
 
@@ -51,39 +51,39 @@ python3 SCRIPT init
 
 ## 基本動作
 
-### 1. デフォルトコレクション
+### 1. デフォルトタイプ
 
-`init` コマンドを実行すると、秘書として基本的に必要な以下のコレクションが
+`init` コマンドを実行すると、秘書として基本的に必要な以下のタイプが
 自動的に作成されます（既に存在する場合はスキップされます）。
 
-| コレクション | 表示名 | 説明 |
-|-------------|--------|------|
-| `persons`   | 人物   | ユーザー（オーナー）と周囲の人々のプロフィール |
-| `events`    | イベント | 起こった出来事や進行中の出来事 |
-| `plans`     | 計画   | 将来の予定された活動 |
-| `goals`     | 目標   | 目標と抱負 |
-| `tasks`     | タスク | 実行すべきアクション項目 |
-| `decisions` | 決定事項 | 決定済みまたは保留中の決定事項 |
-| `notes`     | メモ   | 記憶しておく価値のある一般的な情報 |
+| タイプ | 表示名 | 説明 |
+|--------|--------|------|
+| `person`   | 人物   | ユーザー（オーナー）と周囲の人々のプロフィール |
+| `event`    | イベント | 起こった出来事や進行中の出来事 |
+| `plan`     | 計画   | 将来の予定された活動 |
+| `goal`     | 目標   | 目標と抱負 |
+| `task`     | タスク | 実行すべきアクション項目 |
+| `decision` | 決定事項 | 決定済みまたは保留中の決定事項 |
+| `note`     | メモ   | 記憶しておく価値のある一般的な情報 |
 
-各コレクションにはタイプが紐付けられており、タイプの `fields_schema` がアイテムの
-データ構造のヒントとなります。デフォルトのタイプとコレクションはコード内
-（`db.py` の `DEFAULT_TYPES` と `DEFAULT_COLLECTIONS`）に定義されています。
-ユーザーの用途に合わせてタイプとコレクションを自由に追加できます。
+各タイプは `fields_schema` を持ち、アイテムの `data` フィールドの構造を定義します。
+デフォルトのタイプはコード内（`db.py` の `DEFAULT_TYPES`）に定義されています。
+ユーザーの用途に合わせてタイプを自由に追加できます。
 
 ### 2. ユーザーが情報を報告した場合
 
-ユーザーの非構造化入力を解析し、適切なコレクションにアイテムとして保存します。
+ユーザーの非構造化入力を解析し、適切なタイプでアイテムとして保存します。
 
-**まず既存のコレクションを確認：**
+**まず既存のタイプを確認：**
 ```bash
-python3 SCRIPT col_list
+python3 SCRIPT type_list
 ```
 
 **アイテムの保存例：**
 ```bash
 # イベントを保存
-python3 SCRIPT item_add <events_col_id> '{
+python3 SCRIPT item_add '{
+  "type": "event",
   "title": "チーム定例ミーティング",
   "content": "Q1ロードマップについて議論した。",
   "data": {
@@ -97,15 +97,16 @@ python3 SCRIPT item_add <events_col_id> '{
 }'
 
 # 複数アイテムを一括保存
-python3 SCRIPT item_add_batch <tasks_col_id> '[
-  {"title": "API設計書を仕上げる", "content": "来週水曜までに完成させる", "data": {"due_date": "2025-01-22", "priority": "high", "related_goal": 10}, "tags": "work,api"},
-  {"title": "テスト環境の構築", "content": "ステージング環境をセットアップ", "data": {"due_date": "2025-01-25", "priority": "medium"}, "tags": "work,infra"}
+python3 SCRIPT item_add_batch '[
+  {"type": "task", "title": "API設計書を仕上げる", "content": "来週水曜までに完成させる", "data": {"due_date": "2025-01-22", "priority": "high", "related_goal": 10}, "tags": "work,api"},
+  {"type": "task", "title": "テスト環境の構築", "content": "ステージング環境をセットアップ", "data": {"due_date": "2025-01-25", "priority": "medium"}, "tags": "work,infra"}
 ]'
 ```
 
 **人物の保存例：**
 ```bash
-python3 SCRIPT item_add <persons_col_id> '{
+python3 SCRIPT item_add '{
+  "type": "person",
   "title": "田中太郎",
   "content": "朝型。集中力が高い時間は午前中。",
   "data": {
@@ -136,7 +137,7 @@ python3 SCRIPT item_add <persons_col_id> '{
 }
 ```
 
-- `ref_collection` で参照先のコレクションを明示
+- `ref_type` で参照先のタイプを明示
 - `"multiple": true` の場合はIDの配列、そうでなければ単一のID
 - 参照先のアイテムの詳細が必要な場合は `item_get` で取得
 
@@ -150,22 +151,23 @@ python3 SCRIPT item_add <persons_col_id> '{
 
 最適なクエリ戦略を判断してください：
 
-**キーワードで検索（全コレクション横断）：**
+**キーワードで検索（全アイテム横断）：**
 ```bash
 python3 SCRIPT item_search 'キーワード'
 ```
 
-**特定コレクション内で検索：**
+**特定タイプ内で検索：**
 ```bash
-python3 SCRIPT item_search 'キーワード' <collection_id>
+python3 SCRIPT item_search 'キーワード' person
 ```
 
-**コレクション内のアイテムを一覧（フィルタ付き）：**
+**アイテムを一覧（フィルタ付き）：**
 ```bash
-python3 SCRIPT item_list <collection_id>
-python3 SCRIPT item_list <collection_id> '{"status": "active"}'
-python3 SCRIPT item_list <collection_id> '{"tag": "work"}'
-python3 SCRIPT item_list <collection_id> '{"parent_id": null}'
+python3 SCRIPT item_list
+python3 SCRIPT item_list '{"type": "task"}'
+python3 SCRIPT item_list '{"type": "task", "status": "active"}'
+python3 SCRIPT item_list '{"tag": "work"}'
+python3 SCRIPT item_list '{"parent_id": null}'
 ```
 
 **アイテムの詳細を取得：**
@@ -189,6 +191,7 @@ python3 SCRIPT item_get <item_id>
 python3 SCRIPT item_update <item_id> '{"status": "completed"}'
 python3 SCRIPT item_update <item_id> '{"data": {"priority": "high", "due_date": "2025-02-01"}}'
 python3 SCRIPT item_update <item_id> '{"tags": "work,urgent"}'
+python3 SCRIPT item_update <item_id> '{"type": "task"}'
 ```
 
 注意：`data` フィールドの更新は既存データとマージされます。既存のフィールドを
@@ -200,98 +203,31 @@ python3 SCRIPT item_update <item_id> '{"tags": "work,urgent"}'
 python3 SCRIPT item_delete <item_id>
 ```
 
-### 6. コレクションの管理
-
-**全コレクションを一覧表示：**
-```bash
-python3 SCRIPT col_list
-```
-
-**コレクションの詳細を取得：**
-```bash
-python3 SCRIPT col_get <collection_id>
-```
-
-**新しいコレクションを作成：**
-
-まずタイプを定義し、それをコレクションに紐付けます：
-```bash
-# 1. タイプを定義
-python3 SCRIPT type_set '{
-  "name": "project",
-  "display_name": "プロジェクト",
-  "description": "社内プロジェクトに関するデータ",
-  "fields_schema": [
-    {"name": "deadline", "type": "date", "description": "期限"},
-    {"name": "budget", "type": "number", "description": "予算"},
-    {"name": "owner", "type": "ref", "ref_collection": "persons", "description": "責任者のアイテムID"},
-    {"name": "related_tasks", "type": "ref", "ref_collection": "tasks", "multiple": true, "description": "関連タスクのアイテムID"}
-  ]
-}'
-
-# 2. コレクションを作成（タイプを指定）
-python3 SCRIPT col_create '{
-  "name": "projects",
-  "display_name": "プロジェクト",
-  "description": "社内プロジェクト一覧",
-  "type": "project"
-}'
-```
-
-タイプの `fields_schema` は各アイテムの `data` フィールドに保存するデータの構造を定義する
-フィールド定義のJSON配列です。アイテムを保存する際は、コレクションのタイプの
-`fields_schema` に従ってください。新しいフィールドが必要な場合は、スキーマにないフィールドを
-`data` に直接追加するのではなく、`type_set` でタイプの `fields_schema` 自体を更新してから
-保存してください。コレクションにタイプを設定しない（`type` を省略する）こともできます。
-
-**フィールドの型一覧：**
-
-| type     | 説明                                           |
-|----------|------------------------------------------------|
-| `string` | テキスト値                                     |
-| `number` | 数値                                           |
-| `date`   | 日付 (YYYY-MM-DD)                              |
-| `time`   | 時刻 (HH:MM)                                  |
-| `ref`    | 他のアイテムへのID参照。`ref_collection` で参照先コレクションを指定。`"multiple": true` でIDの配列 |
-
-**コレクションを更新：**
-```bash
-python3 SCRIPT col_update <collection_id> '{"display_name": "新しい表示名"}'
-python3 SCRIPT col_update <collection_id> '{"type": "new-type-name"}'
-```
-
-**コレクションを削除（全アイテムも連鎖削除）：**
-```bash
-python3 SCRIPT col_delete <collection_id>
-```
-
-### 7. 階層構造
+### 6. 階層構造
 
 アイテムは `parent_id` による階層構造をサポートしています。
 
 ```bash
 # 親アイテム
-python3 SCRIPT item_add <col_id> '{"title": "エンジニアリング部", "data": {"head_count": 45}}'
+python3 SCRIPT item_add '{"type": "note", "title": "エンジニアリング部", "data": {"head_count": 45}}'
 
 # 子アイテム（parent_idで親を参照）
-python3 SCRIPT item_add <col_id> '{"title": "フロントエンドチーム", "data": {"head_count": 12}, "parent_id": 1}'
+python3 SCRIPT item_add '{"type": "note", "title": "フロントエンドチーム", "data": {"head_count": 12}, "parent_id": 1}'
 ```
 
 ルートアイテムのみ表示：
 ```bash
-python3 SCRIPT item_list <col_id> '{"parent_id": null}'
+python3 SCRIPT item_list '{"parent_id": null}'
 ```
 
 ## タイプ（type）
 
-`type` はコレクションのデータスキーマを定義する仕組みです。`types` テーブルで定義され、
-`collections.type` から外部キーで参照されます。コレクション内のすべてのアイテムは
-コレクションのタイプに従います。
+`type` はアイテムのデータスキーマを定義する仕組みです。`types` テーブルで定義され、
+`items.type` から外部キーで参照されます。
 
-- 1コレクションにつき1つだけ設定可能（または未設定）
-- **コレクションにtypeを設定する前に、必ず `type_set` でタイプを定義してください**
-- タイプを削除すると、そのタイプを持つコレクションの `type` は `null` になります
-- 複数のコレクションが同じタイプを共有できます
+- アイテムにはタイプを1つだけ設定可能（または未設定）
+- **アイテムにtypeを設定する前に、必ず `type_set` でタイプを定義してください**
+- タイプを削除すると、そのタイプを持つアイテムの `type` は `null` になります
 
 **タイプの定義：**
 ```bash
@@ -302,24 +238,17 @@ python3 SCRIPT type_set '{
   "fields_schema": [
     {"name": "status", "type": "string", "description": "進捗状態", "required": true},
     {"name": "deadline", "type": "date", "description": "期限"},
-    {"name": "budget", "type": "number", "description": "予算（万円）"}
+    {"name": "budget", "type": "number", "description": "予算（万円）"},
+    {"name": "owner", "type": "ref", "ref_type": "person", "description": "責任者のアイテムID"},
+    {"name": "related_tasks", "type": "ref", "ref_type": "task", "multiple": true, "description": "関連タスクのアイテムID"}
   ]
 }'
 ```
 
-**タイプを指定してコレクションを作成：**
+**アイテムの保存（タイプを指定）：**
 ```bash
-python3 SCRIPT col_create '{
-  "name": "projects",
-  "display_name": "プロジェクト一覧",
-  "description": "社内プロジェクト",
-  "type": "project"
-}'
-```
-
-**アイテムの保存（タイプはコレクションから自動的に継承）：**
-```bash
-python3 SCRIPT item_add <col_id> '{
+python3 SCRIPT item_add '{
+  "type": "project",
   "title": "プロジェクトAlpha",
   "data": {"status": "進行中", "deadline": "2025-06-01", "budget": 500},
   "tags": "work,frontend"
@@ -333,10 +262,15 @@ python3 SCRIPT type_list
 python3 SCRIPT type_delete <type_name>
 ```
 
-**コレクションのタイプを変更：**
-```bash
-python3 SCRIPT col_update <col_id> '{"type": "new-type-name"}'
-```
+**フィールドの型一覧：**
+
+| type     | 説明                                           |
+|----------|------------------------------------------------|
+| `string` | テキスト値                                     |
+| `number` | 数値                                           |
+| `date`   | 日付 (YYYY-MM-DD)                              |
+| `time`   | 時刻 (HH:MM)                                  |
+| `ref`    | 他のアイテムへのID参照。`ref_type` で参照先タイプを指定。`"multiple": true` でIDの配列 |
 
 ### タイプの追加についての検討プロセス
 
@@ -350,7 +284,7 @@ python3 SCRIPT col_update <col_id> '{"type": "new-type-name"}'
 - 例：会議の議事録 → `event` タイプのアイテムとして `content` に議事録を記載すれば十分
 - 例：買い物リスト → `task` タイプのアイテムとしてタグで分類すれば十分
 
-**既存タイプで対応できる場合は、新しいタイプを作らずに既存のコレクションを活用してください。**
+**既存タイプで対応できる場合は、新しいタイプを作らずに既存のタイプを活用してください。**
 
 #### ステップ2: 既存のタイプを拡張できないか検討する
 
@@ -377,7 +311,6 @@ python3 SCRIPT type_set '{
 
 拡張が不適切なケース：
 - 追加するフィールドが既存タイプの本来の目的から逸脱する場合
-- 同じタイプを使う他のコレクションに不要なフィールドが大量に増える場合
 
 #### ステップ3: 新しいタイプとして追加する
 
@@ -391,13 +324,13 @@ python3 SCRIPT type_set '{
 
 新しいタイプ作成時の注意：
 - 既存のデフォルトタイプ（person, event, plan, goal, task, decision, note）と意味が重複しないか再確認する
-- `ref` フィールドで既存コレクションとの関連を設計する
+- `ref` フィールドで既存タイプとの関連を設計する
 - タイプ名は英語の単数形にする（例: `book`, `project`, `recipe`）
 
 ## タグ（tags）
 
 タグは検索・分類用の**階層構造を持つラベル**です。1アイテムに複数付けることができます。
-タイプとは独立した概念で、`tags` テーブルで管理され、`collection_item_tags` テーブルで
+タイプとは独立した概念で、`tags` テーブルで管理され、`item_tags` テーブルで
 アイテムに紐付けられます。
 
 各タグは `parent_id` を持ち、親子関係によるツリー構造を形成できます。
@@ -489,21 +422,21 @@ python3 SCRIPT tags_tree
 ユーザー: 「今日は14時から佐藤さんとチームミーティングがあって、来月のリリース計画について話し合った。」
 
 アクション:
-1. `col_list` でコレクションIDを確認
-2. personsコレクションで佐藤さんのIDを検索: `item_search '佐藤' <persons_col_id>`
-3. eventsコレクションにイベントを保存: `item_add <events_col_id> '{"title": "チームミーティング", "content": "リリース計画の議論", "data": {"event_date": "...", "start_time": "14:00", "related_persons": [佐藤のID]}}'`
+1. `type_list` でタイプを確認
+2. personタイプで佐藤さんのIDを検索: `item_search '佐藤' person`
+3. eventタイプでイベントを保存: `item_add '{"type": "event", "title": "チームミーティング", "content": "リリース計画の議論", "data": {"event_date": "...", "start_time": "14:00", "related_persons": [佐藤のID]}}'`
 
 ### 人物に関連するアイテムの検索
 ユーザー: 「佐藤さんとの最近の打ち合わせ内容は？」
 
 アクション:
 1. 佐藤さんのアイテムIDを検索
-2. 全コレクションで佐藤さんのIDを含むアイテムを検索: `item_search '佐藤'`
-3. または特定コレクション内で検索
+2. 全アイテムで佐藤さんのIDを含むアイテムを検索: `item_search '佐藤'`
+3. または特定タイプ内で検索: `item_search '佐藤' event`
 
 ### 新しいドメインデータ
-ユーザーがエントリや人物に収まらない構造化データについて言及した場合、
-新しいコレクションの作成を積極的に提案してください。
+ユーザーが既存のタイプに収まらない構造化データについて言及した場合、
+新しいタイプの作成を積極的に提案してください。
 
 ```bash
 # 例：読書リスト
@@ -517,15 +450,15 @@ python3 SCRIPT type_set '{
     {"name": "isbn", "type": "string", "description": "ISBN"},
     {"name": "read_date", "type": "date", "description": "読了日"},
     {"name": "rating", "type": "number", "description": "評価 (1-5)"},
-    {"name": "recommended_by", "type": "ref", "ref_collection": "persons", "description": "推薦者のアイテムID"}
+    {"name": "recommended_by", "type": "ref", "ref_type": "person", "description": "推薦者のアイテムID"}
   ]
 }'
 
-# 2. コレクションを作成
-python3 SCRIPT col_create '{
-  "name": "books",
-  "display_name": "読書リスト",
-  "description": "読んだ本・読みたい本",
-  "type": "book"
+# 2. アイテムを保存
+python3 SCRIPT item_add '{
+  "type": "book",
+  "title": "リーダブルコード",
+  "data": {"author": "Dustin Boswell", "rating": 5, "read_date": "2025-01-10"},
+  "tags": "tech,programming"
 }'
 ```
