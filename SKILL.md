@@ -161,6 +161,7 @@ python3 SCRIPT item_search 'キーワード' <collection_id>
 ```bash
 python3 SCRIPT item_list <collection_id>
 python3 SCRIPT item_list <collection_id> '{"status": "active"}'
+python3 SCRIPT item_list <collection_id> '{"type": "project"}'
 python3 SCRIPT item_list <collection_id> '{"tag": "work"}'
 python3 SCRIPT item_list <collection_id> '{"parent_id": null}'
 ```
@@ -185,6 +186,7 @@ python3 SCRIPT item_get <item_id>
 ```bash
 python3 SCRIPT item_update <item_id> '{"status": "completed"}'
 python3 SCRIPT item_update <item_id> '{"data": {"priority": "high", "due_date": "2025-02-01"}}'
+python3 SCRIPT item_update <item_id> '{"type": "meeting-notes"}'
 python3 SCRIPT item_update <item_id> '{"tags": "work,urgent"}'
 ```
 
@@ -265,20 +267,19 @@ python3 SCRIPT item_add <col_id> '{"title": "フロントエンドチーム", "d
 python3 SCRIPT item_list <col_id> '{"parent_id": null}'
 ```
 
-## タグ管理
+## タイプ（type）
 
-タグはすべてのアイテム間で共有されます。各タグには期待されるデータフィールドを
-定義する**スキーマ**を持たせることができます。
+`type` はアイテムの情報の種類を定義するフィールドです。`types` テーブルで定義され、
+`collection_items.type` から外部キーで参照されます。
 
-**全タグを一覧表示：**
+- 1アイテムにつき1つだけ設定可能（または未設定）
+- **アイテムにtypeを設定する前に、必ず `type_set` でタイプを定義してください**
+- タイプを削除すると、そのタイプを持つアイテムの `type` は `null` になります
+
+**タイプの定義（先に実行）：**
 ```bash
-python3 SCRIPT tags_list
-```
-
-**タグスキーマを定義する：**
-```bash
-python3 SCRIPT tag_schema_set '{
-  "tag": "project",
+python3 SCRIPT type_set '{
+  "name": "project",
   "display_name": "プロジェクト",
   "description": "社内プロジェクトに関するデータ",
   "fields_schema": [
@@ -289,11 +290,41 @@ python3 SCRIPT tag_schema_set '{
 }'
 ```
 
-**タグスキーマを取得/一覧/削除：**
+**アイテムにタイプを設定して保存：**
 ```bash
-python3 SCRIPT tag_schema_get <tag>
-python3 SCRIPT tag_schema_list
-python3 SCRIPT tag_schema_delete <tag>
+python3 SCRIPT item_add <col_id> '{
+  "title": "プロジェクトAlpha",
+  "type": "project",
+  "data": {"status": "進行中", "deadline": "2025-06-01", "budget": 500},
+  "tags": "work,frontend"
+}'
+```
+
+**タイプの取得/一覧/削除：**
+```bash
+python3 SCRIPT type_get <type_name>
+python3 SCRIPT type_list
+python3 SCRIPT type_delete <type_name>
+```
+
+**タイプでアイテムを絞り込み：**
+```bash
+python3 SCRIPT item_list <col_id> '{"type": "project"}'
+```
+
+**タイプの更新：**
+```bash
+python3 SCRIPT item_update <item_id> '{"type": "meeting-notes"}'
+```
+
+## タグ（tags）
+
+タグは検索・分類用のラベルです。1アイテムに複数付けることができます。
+タイプとは独立した概念で、`collection_item_tags` テーブルに保存されます。
+
+**全タグを一覧表示：**
+```bash
+python3 SCRIPT tags_list
 ```
 
 ### タグの命名規則

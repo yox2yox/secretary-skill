@@ -18,9 +18,19 @@ CREATE TABLE IF NOT EXISTS collections (
 );
 CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name);
 
+CREATE TABLE IF NOT EXISTS types (
+    name TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    fields_schema TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS collection_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    type TEXT REFERENCES types(name) ON DELETE SET NULL,
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     data TEXT NOT NULL DEFAULT '{}',
@@ -40,15 +50,6 @@ CREATE TABLE IF NOT EXISTS collection_item_tags (
     PRIMARY KEY (item_id, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_collection_item_tags_tag ON collection_item_tags(tag);
-
-CREATE TABLE IF NOT EXISTS tag_schemas (
-    tag TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    fields_schema TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
-);
 """
 
 FTS_SQL = """
@@ -173,9 +174,42 @@ def get_connection():
     return conn
 
 
+def _migrate(conn):
+    """Run all necessary migrations for existing databases."""
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+
+    # Migrate tag_schemas -> types
+    if "tag_schemas" in tables and "types" not in tables:
+        conn.execute(
+            """CREATE TABLE types (
+                name TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                fields_schema TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )"""
+        )
+        conn.execute(
+            """INSERT INTO types (name, display_name, description, fields_schema, created_at, updated_at)
+               SELECT tag, display_name, description, fields_schema, created_at, updated_at
+               FROM tag_schemas"""
+        )
+        conn.execute("DROP TABLE tag_schemas")
+
+    # Add type column to collection_items if missing
+    if "collection_items" in tables:
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(collection_items)").fetchall()]
+        if "type" not in cols:
+            conn.execute("ALTER TABLE collection_items ADD COLUMN type TEXT REFERENCES types(name) ON DELETE SET NULL")
+
+
 def ensure_schema(conn):
     """Ensure the database schema exists."""
     conn.executescript(SCHEMA_SQL)
+    _migrate(conn)
     try:
         conn.executescript(FTS_SQL)
     except Exception:
