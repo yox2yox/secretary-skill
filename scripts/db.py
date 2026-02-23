@@ -34,6 +34,15 @@ CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);
 CREATE INDEX IF NOT EXISTS idx_items_parent_id ON items(parent_id);
 CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
 CREATE INDEX IF NOT EXISTS idx_items_type_status ON items(type, status);
+
+CREATE TABLE IF NOT EXISTS item_relations (
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    related_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    field_name TEXT NOT NULL,
+    PRIMARY KEY (item_id, related_item_id, field_name)
+);
+CREATE INDEX IF NOT EXISTS idx_item_relations_item ON item_relations(item_id);
+CREATE INDEX IF NOT EXISTS idx_item_relations_related ON item_relations(related_item_id);
 """
 
 FTS_SQL = """
@@ -156,6 +165,22 @@ def get_connection():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+def get_ref_fields(conn, type_name):
+    """Return a dict of ref field definitions for the given type.
+
+    Keys are field names, values are dicts with 'ref_type' and 'multiple'.
+    Uses resolved fields (including inherited ones).
+    """
+    if not type_name:
+        return {}
+    fields = get_resolved_fields(conn, type_name)
+    return {
+        f["name"]: {"ref_type": f.get("ref_type", ""), "multiple": f.get("multiple", False)}
+        for f in fields
+        if f.get("type") == "ref"
+    }
 
 
 def _migrate(conn):
@@ -296,6 +321,66 @@ def _migrate(conn):
                     (_json.dumps(fs, ensure_ascii=False), row["name"]),
                 )
         conn.commit()
+
+    # --- Migrate ref data from items.data JSON to item_relations table ---
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "item_relations" in tables and "types" in tables and "items" in tables:
+        import json as _json
+        # Only run if item_relations is empty (first-time migration)
+        rel_count = conn.execute("SELECT COUNT(*) FROM item_relations").fetchone()[0]
+        if rel_count == 0:
+            # Build ref field map per type
+            ref_map = {}  # type_name -> {field_name: {ref_type, multiple}}
+            t_rows = conn.execute("SELECT name, fields_schema FROM types").fetchall()
+            for t_row in t_rows:
+                try:
+                    fs = _json.loads(t_row["fields_schema"]) if t_row["fields_schema"] else []
+                except (_json.JSONDecodeError, TypeError):
+                    continue
+                refs = {}
+                for f in fs:
+                    if f.get("type") == "ref":
+                        refs[f["name"]] = {"multiple": f.get("multiple", False)}
+                if refs:
+                    ref_map[t_row["name"]] = refs
+
+            if ref_map:
+                item_rows = conn.execute(
+                    "SELECT id, type, data FROM items WHERE type IS NOT NULL"
+                ).fetchall()
+                for item_row in item_rows:
+                    itype = item_row["type"]
+                    if itype not in ref_map:
+                        continue
+                    try:
+                        data = _json.loads(item_row["data"]) if item_row["data"] else {}
+                    except (_json.JSONDecodeError, TypeError):
+                        continue
+                    changed = False
+                    for fname, finfo in ref_map[itype].items():
+                        if fname not in data:
+                            continue
+                        val = data[fname]
+                        ids = []
+                        if finfo["multiple"] and isinstance(val, list):
+                            ids = [int(v) for v in val if v is not None]
+                        elif not finfo["multiple"] and val is not None:
+                            ids = [int(val)]
+                        for rid in ids:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO item_relations (item_id, related_item_id, field_name) VALUES (?, ?, ?)",
+                                (item_row["id"], rid, fname),
+                            )
+                        del data[fname]
+                        changed = True
+                    if changed:
+                        conn.execute(
+                            "UPDATE items SET data = ? WHERE id = ?",
+                            (_json.dumps(data, ensure_ascii=False), item_row["id"]),
+                        )
+                conn.commit()
 
 
 def ensure_schema(conn):

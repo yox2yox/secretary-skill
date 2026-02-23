@@ -103,20 +103,38 @@ python3 SCRIPT item_list '{"type": "meeting"}'
 
 ## リレーション（データ間の関係）
 
-アイテム間の関係は `data` フィールド内にIDで参照します。`fields_schema` で
-`"type": "ref"` として定義されたフィールドを使います。
+アイテム間の関係は `item_relations` テーブルに保存されます。`fields_schema` で
+`"type": "ref"` として定義されたフィールドが対象です。
 
-```json
-{
-  "related_persons": [3, 5],
-  "assignee": 7,
-  "related_goal": 10
-}
+**保存時:** `data` にrefフィールドのIDを含めると、自動的に `item_relations` テーブルに
+保存され、`data` JSON からは除外されます。
+
+**取得時:** `item_get` や `item_list`、`item_search` のレスポンスでは、
+`item_relations` テーブルから取得した関連IDが `data` に含まれた形で返されます。
+
+```bash
+# アイテム追加時にrefフィールドを指定
+python3 SCRIPT item_add '{
+  "type": "task",
+  "title": "設計書作成",
+  "data": {"due_date": "2025-01-22", "assignee": 7, "related_goal": 10}
+}'
+# assignee と related_goal は item_relations テーブルに保存される
+# data JSON には due_date のみ保存される
 ```
 
 - `ref_type` で参照先のタイプを明示
 - `"multiple": true` の場合はIDの配列、そうでなければ単一のID
 - 参照先のアイテムの詳細が必要な場合は `item_get` で取得
+
+### 全文検索と関連アイテム
+
+`item_search` はリレーションを横断して検索します。あるアイテムに直接キーワードが
+含まれていなくても、関連付けされたアイテムにキーワードが含まれていれば検索結果に
+含まれます。
+
+例: タスクに関連付けされた人物の名前に「田中」があれば、「田中」で検索した際に
+そのタスクも結果に含まれます。
 
 ## 階層構造
 
