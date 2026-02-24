@@ -23,11 +23,11 @@ allowed-tools: Bash
 
 ## スクリプトの場所
 
-秘書DBスクリプト: !`find ~/.claude/skills .claude/skills -path '*/secretary-skill/scripts/secretary.py' 2>/dev/null | head -1`
+秘書DBスクリプト: !`find ~/.claude/skills .claude/skills -path '*/secretary-skill/scripts/secretary_search.py' 2>/dev/null | head -1`
 
 上記のスクリプトパスが空の場合、以下の一般的な場所を確認してください：
-- `.claude/skills/secretary-skill/scripts/secretary.py`
-- `~/.claude/skills/secretary-skill/scripts/secretary.py`
+- `.claude/skills/secretary-skill/scripts/secretary_search.py`
+- `~/.claude/skills/secretary-skill/scripts/secretary_search.py`
 
 解決したパスを保存し、以降のすべてのコマンドで使用してください。以下のコマンドでは
 解決済みパスのプレースホルダーとして `SCRIPT` を使用しています。
