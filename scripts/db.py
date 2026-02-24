@@ -145,15 +145,6 @@ DEFAULT_TYPES = [
             {"name": "related_persons", "type": "ref", "ref_type": "person", "multiple": True, "description": "関係者のアイテムID"},
         ],
     },
-    {
-        "name": "note",
-        "display_name": "メモ",
-        "description": "記憶しておく価値のある一般的な情報",
-        "fields_schema": [
-            {"name": "note_date", "type": "date", "description": "メモの日付"},
-            {"name": "source", "type": "string", "description": "情報の出所"},
-        ],
-    },
 ]
 
 

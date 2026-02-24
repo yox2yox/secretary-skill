@@ -142,10 +142,10 @@ python3 SCRIPT item_add '{
 
 ```bash
 # 親アイテム
-python3 SCRIPT item_add '{"type": "note", "title": "エンジニアリング部", "data": {"head_count": 45}}'
+python3 SCRIPT item_add '{"type": "event", "title": "全社ミーティング", "data": {"event_date": "2025-01-15"}}'
 
 # 子アイテム（parent_idで親を参照）
-python3 SCRIPT item_add '{"type": "note", "title": "フロントエンドチーム", "data": {"head_count": 12}, "parent_id": 1}'
+python3 SCRIPT item_add '{"type": "task", "title": "議事録を共有する", "data": {"due_date": "2025-01-16"}, "parent_id": 1}'
 ```
 
 ルートアイテムのみ表示：
@@ -165,7 +165,6 @@ python3 SCRIPT item_list '{"parent_id": null}'
 | `goal`     | 目標   | 目標と抱負 |
 | `task`     | タスク | 実行すべきアクション項目 |
 | `decision` | 決定事項 | 決定済みまたは保留中の決定事項 |
-| `note`     | メモ   | 記憶しておく価値のある一般的な情報 |
 
 各タイプは `fields_schema` を持ち、アイテムの `data` フィールドの構造を定義します。
 デフォルトのタイプはコード内（`db.py` の `DEFAULT_TYPES`）に定義されています。
