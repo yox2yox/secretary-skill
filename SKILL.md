@@ -98,8 +98,16 @@ python3 SCRIPT item_search 'キーワード'
 # タイプで絞り込み検索（子孫タイプも含む）
 python3 SCRIPT item_search 'キーワード' event
 
+# 高度な絞り込み検索（JSONフィルタ）
+python3 SCRIPT item_search 'キーワード' '{"type": "task", "status": "active", "data_filters": {"priority": "high"}}'
+
 # フィルタ付き一覧
 python3 SCRIPT item_list '{"type": "task", "status": "active"}'
+
+# ソート・日付範囲・データフィールドフィルタ付き一覧
+python3 SCRIPT item_list '{"type": "task", "sort": "updated_at", "sort_order": "desc"}'
+python3 SCRIPT item_list '{"type": "task", "data_filters": {"due_date": {"before": "2025-02-01"}, "priority": "high"}}'
+python3 SCRIPT item_list '{"created_at_after": "2025-01-01", "created_at_before": "2025-01-31"}'
 ```
 
 **ステップ3: 必要に応じて詳細を取得する**
