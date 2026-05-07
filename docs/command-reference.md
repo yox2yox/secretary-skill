@@ -7,14 +7,13 @@
 ## 推奨モード
 
 スキル呼び出し時は、短い固定モードを渡す前提です。外部からの呼び出し入口は
-`add`、`ask`、`collect` の3つです。旧 `item_*` / `type_*` コマンドは内部処理や
+`add` と `ask` の2つだけです。旧 `item_*` / `type_*` コマンドは内部処理や
 後方互換のために残っています。
 
 | モード | 旧コマンド | 用途 |
 |---|---|---|
 | `add` | `item_add` | 情報の追加。1件か複数件かは内容を見て判断する |
 | `ask` | `item_search` | キーワード検索・質問 |
-| `collect` | - | Notion/Slack MCPから取得した正規化済みイベントの計画・保存 |
 
 ## init
 
@@ -28,125 +27,6 @@ python3 SCRIPT init
 - テストや一時実行では `SECRETARY_DB_PATH` 環境変数でDBファイルを上書きできる
 - 冪等（複数回実行しても安全）
 - デフォルトタイプが存在しない場合のみ作成される
-
-## collect
-
-Notion/Slack MCP など外部サービスから情報を収集するための入口です。Python スクリプトは
-MCPを直接呼び出しません。上位エージェントが利用可能な Notion/Slack MCP ツールで
-「自分の最近の投稿」と「自分宛ての最近のメンション」を取得し、共通JSONへ正規化して
-`collect save` に渡します。
-
-### collect plan
-
-収集対象ごとの `since`、`limit`、`collection_key` をJSONで返します。
-
-```bash
-python3 SCRIPT collect plan all
-python3 SCRIPT collect plan slack
-python3 SCRIPT collect plan notion
-```
-
-対象サービスは `slack`、`notion`、`all` です。各サービスについて以下の2 streamを返します。
-
-| stream | 説明 |
-|---|---|
-| `own_posts` | 自分の最近の投稿 |
-| `mentions` | 自分宛ての最近のメンション |
-
-初回や状態がない場合、`since` は `null`、`limit` は `50` です。保存後は
-`collection_state` の `last_source_timestamp` または `last_collected_at` に基づいて
-次回の `since` が設定されます。
-
-**レスポンス例:**
-```json
-{
-  "status": "ok",
-  "plans": [
-    {
-      "service": "slack",
-      "stream": "mentions",
-      "collection_key": "slack:mentions",
-      "since": null,
-      "limit": 50,
-      "cursor": null,
-      "last_error": null
-    }
-  ]
-}
-```
-
-### collect save
-
-MCPから取得して正規化したイベントを保存します。
-
-```bash
-python3 SCRIPT collect save '<json>'
-```
-
-**正規化JSON仕様:**
-
-```json
-{
-  "items": [
-    {
-      "service": "slack",
-      "stream": "mentions",
-      "source_id": "unique-source-id",
-      "source_url": "https://example.com/message",
-      "source_created_at": "2026-05-07T10:30:00+09:00",
-      "source_updated_at": "2026-05-07T10:30:00+09:00",
-      "title": "Slack mention from Alice",
-      "content": "本文",
-      "author": "Alice",
-      "location": "#channel",
-      "mentioned_user": "me",
-      "raw_payload": {}
-    }
-  ]
-}
-```
-
-**必須フィールド:**
-
-| フィールド | 型 | 説明 |
-|---|---|---|
-| `service` | string | `slack` または `notion` |
-| `stream` | string | `own_posts` または `mentions` |
-| `source_id` | string | service/stream内で一意な収集元ID |
-
-`title` または `content` のどちらか一方は必須です。`source_created_at` と
-`source_updated_at` は指定する場合、parse 可能な ISO 8601 日時にしてください。
-タイムゾーンなし/ありのどちらも受け付けますが、不正な日時文字列は `status:error`
-になります。`raw_payload` は入力された場合だけ `collected_message` の
-`data.raw_payload` に保存されます。
-
-**保存動作:**
-
-- 新規イベントは `items` に `collected_message` として保存される
-- `collected_items` に `(service, stream, source_id)` と item ID の対応が保存される
-- 同じ `(service, stream, source_id)` は重複保存せず `skipped` に数える
-- `collection_state` に streamごとの `last_collected_at`、`last_source_timestamp`、
-  `last_success_at` が更新される
-- 不正JSON、未対応service/stream、`source_id` 欠落は非ゼロ終了し、JSON
-  `{"status":"error", ...}` を返す
-
-**レスポンス例:**
-```json
-{
-  "status": "ok",
-  "saved": 1,
-  "skipped": 0,
-  "ids": [1],
-  "state_updated": [
-    {
-      "service": "slack",
-      "stream": "mentions",
-      "last_collected_at": "2026-05-07T01:30:00+00:00",
-      "last_source_timestamp": "2026-05-07T10:30:00+09:00"
-    }
-  ]
-}
-```
 
 ## add / item_add
 
