@@ -1,0 +1,6 @@
+name: secretary-skill
+version: 1.0.0
+description: SQLite-backed personal secretary skill for structured item storage and search.
+dependencies:
+  apm: []
+scripts: {}
