@@ -48,6 +48,21 @@ python3 SCRIPT add '<json>'
 | `parent_id` | integer | 親アイテムのID（階層構造用） |
 | `status` | string | ステータス（デフォルト: `"active"`） |
 
+**refフィールドの事前解決:**
+
+`add` で保存する前に、保存対象タイプの `fields_schema` / `resolved_fields` にある
+`type: "ref"` かつ `ref_type` が定義された既存フィールドだけを使用して、関連候補を検索・解決します。
+汎用的な関連フィールドは追加しません。
+
+- 人物候補は、敬称除去、姓のみ・名のみ、ひらがな/カタカナ/漢字、全角/半角、
+  妥当と思われるローマ字表記も含めて既存の `person` を検索する
+- 人物以外は関連語を抽出し、`project`、`goal`、`meeting`、`task`、`release` など
+  該当しそうな既存タイプを検索する
+- 1件だけ確信度の高い一致がある場合は、`related_persons`、`assignee`、`attendees`、
+  `related_goal`、`related_project` など該当する既存refフィールドにIDを入れる
+- 複数候補や曖昧な一致がある場合は、保存前にユーザー確認を求める
+- 確信度が低い、またはよい一致がない場合はrefを省略し、未解決候補として報告する
+
 **例:**
 ```bash
 python3 SCRIPT add '{
