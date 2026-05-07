@@ -9,7 +9,7 @@ description: >
   ポリモーフィックな検索が可能です。データ間の関係はitem_relationsテーブルに
   IDで保存され、検索時には関連アイテムの内容も含めた全文検索が可能です。
   決められた呼び出し引数で使うことを前提にします。情報の追加はadd、
-  質問や検索はaskを使います。日常の活動報告、イベント記録、
+  質問や検索はask、外部サービスからの情報収集はcollectを使います。日常の活動報告、イベント記録、
   目標設定、将来のタスク計画、保存された情報への質問、個人・連絡先
   プロフィール管理、構造化ドメインデータの保存・検索、サマリーや
   スケジュール確認に使用してください。
@@ -46,16 +46,81 @@ python3 SCRIPT init
 ## 呼び出し引数の前提
 
 このスキルは、ユーザーや上位エージェントが以下の固定モードを渡して呼び出す前提で
-動作します。外部からの呼び出し入口は `add` と `ask` の2つだけです。
+動作します。外部からの呼び出し入口は `add`、`ask`、`collect` の3つです。
 
 | モード | 用途 | 実行コマンド |
 |---|---|---|
 | `add` | 情報の追加。1件か複数件かは内容を見て判断する | `python3 SCRIPT add '<json>'` |
 | `ask` | 保存済み情報への質問・検索 | `python3 SCRIPT ask '<keyword>' [type_or_json_filter]` |
+| `collect` | Notion/Slack MCPなどから収集した情報の計画・保存 | `python3 SCRIPT collect plan [service|all]` / `python3 SCRIPT collect save '<json>'` |
 
 内部処理では `type_tree`、`item_add`、`item_search`、`item_list`、`item_get` などの
 既存コマンドを必要に応じて使ってください。`add_batch` という呼び出しモードは使わず、
 複数件登録すべき場合は `add` の処理中に個別のアイテムへ分割して判断します。
+
+## `collect` で外部サービスから収集する場合
+
+`collect` は Python スクリプトから MCP を直接呼び出すコマンドではありません。上位エージェントが
+利用可能な Notion/Slack MCP ツールで情報を取得し、その結果を共通JSONへ正規化して
+`collect save` に渡します。スクリプト側は取得計画、前回取得状態、重複排除、DB保存を担当します。
+
+**ステップ1: 収集計画を取得する**
+
+```bash
+python3 SCRIPT collect plan all
+python3 SCRIPT collect plan slack
+python3 SCRIPT collect plan notion
+```
+
+`all` は Notion/Slack の `own_posts` と `mentions` を対象にします。初回は `since` が
+`null`、`limit` が `50` になります。保存後は `collection_state` に記録された
+`last_source_timestamp` または `last_collected_at` をもとに、次回の `since` が返ります。
+
+**ステップ2: MCPで取得して正規化する**
+
+Notion MCP と Slack MCP で以下を取得します。
+
+- 自分の最近の投稿: `own_posts`
+- 自分宛ての最近のメンション: `mentions`
+
+取得結果は次の共通形式に正規化します。
+
+```json
+{
+  "items": [
+    {
+      "service": "slack",
+      "stream": "mentions",
+      "source_id": "unique-source-id",
+      "source_url": "https://example.com/message",
+      "source_created_at": "2026-05-07T10:30:00+09:00",
+      "source_updated_at": "2026-05-07T10:30:00+09:00",
+      "title": "Slack mention from Alice",
+      "content": "本文",
+      "author": "Alice",
+      "location": "#channel",
+      "mentioned_user": "me",
+      "raw_payload": {}
+    }
+  ]
+}
+```
+
+`service` は `slack` または `notion`、`stream` は `own_posts` または `mentions` です。
+`source_id` は同じ service/stream 内で一意にしてください。`source_created_at` と
+`source_updated_at` は指定する場合、parse 可能な ISO 8601 日時にしてください。
+タイムゾーンなし/ありのどちらも受け付けますが、不正な日時文字列は保存されません。
+`raw_payload` は必要な場合だけ渡します。
+
+**ステップ3: 保存する**
+
+```bash
+python3 SCRIPT collect save '<json>'
+```
+
+新規イベントは `collected_message` アイテムとして保存され、`collected_items` で
+`(service, stream, source_id)` によって重複排除されます。同じイベントを再投入した場合は
+新しいアイテムを作らず `skipped` として返します。
 
 ## `add` で情報を追加する場合
 

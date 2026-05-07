@@ -3,8 +3,10 @@
 import os
 import sqlite3
 
-DB_DIR = os.path.expanduser("~/.secretary")
-DB_PATH = os.path.join(DB_DIR, "data.db")
+_DEFAULT_DB_DIR = os.path.expanduser("~/.secretary")
+_ENV_DB_PATH = os.environ.get("SECRETARY_DB_PATH")
+DB_PATH = os.path.abspath(os.path.expanduser(_ENV_DB_PATH)) if _ENV_DB_PATH else os.path.join(_DEFAULT_DB_DIR, "data.db")
+DB_DIR = os.path.dirname(DB_PATH)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS types (
@@ -43,6 +45,31 @@ CREATE TABLE IF NOT EXISTS item_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_item_relations_item ON item_relations(item_id);
 CREATE INDEX IF NOT EXISTS idx_item_relations_related ON item_relations(related_item_id);
+
+CREATE TABLE IF NOT EXISTS collection_state (
+    service TEXT NOT NULL,
+    stream TEXT NOT NULL,
+    last_collected_at TEXT,
+    last_source_timestamp TEXT,
+    last_source_cursor TEXT,
+    last_success_at TEXT,
+    last_error TEXT,
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    PRIMARY KEY (service, stream)
+);
+
+CREATE TABLE IF NOT EXISTS collected_items (
+    service TEXT NOT NULL,
+    stream TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    source_url TEXT,
+    source_timestamp TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    PRIMARY KEY (service, stream, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_collected_items_item_id ON collected_items(item_id);
+CREATE INDEX IF NOT EXISTS idx_collected_items_source_timestamp ON collected_items(source_timestamp);
 """
 
 FTS_SQL = """
@@ -66,6 +93,23 @@ END;
 
 
 DEFAULT_TYPES = [
+    {
+        "name": "collected_message",
+        "display_name": "収集メッセージ",
+        "description": "NotionやSlackなど外部サービスから収集した投稿・メンション",
+        "fields_schema": [
+            {"name": "service", "type": "string", "description": "収集元サービス (slack/notion)"},
+            {"name": "stream", "type": "string", "description": "収集ストリーム (own_posts/mentions)"},
+            {"name": "source_id", "type": "string", "description": "収集元で一意なID"},
+            {"name": "source_url", "type": "string", "description": "収集元URL"},
+            {"name": "source_created_at", "type": "string", "description": "収集元作成日時"},
+            {"name": "source_updated_at", "type": "string", "description": "収集元更新日時"},
+            {"name": "author", "type": "string", "description": "投稿者"},
+            {"name": "channel_or_workspace", "type": "string", "description": "チャンネル、ページ、ワークスペースなどの場所"},
+            {"name": "mentioned_user", "type": "string", "description": "メンション対象ユーザー"},
+            {"name": "raw_payload", "type": "string", "description": "必要に応じて保存する収集元の生ペイロード"},
+        ],
+    },
     {
         "name": "person",
         "display_name": "人物",
