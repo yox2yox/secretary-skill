@@ -15,6 +15,12 @@ Commands:
     item_add_batch '<json>'           Add multiple items
     item_get <id>                     Get item details
     item_update <id> '<json>'         Update an item
+    item_relation_add <id> <related_id> [relation]
+                                      Add a direct item relation
+    item_relation_set <id> '<json>'   Replace direct relations for an item
+    item_relation_delete <id> [related_id] [relation]
+                                      Delete direct item relations
+    item_relations <id>               List direct item relations
     item_delete <id>                  Delete an item
     item_list ['<json_filter>']       List items with optional filters
     item_search '<keyword>' [type]    Search items
@@ -35,6 +41,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from items_mod import (
     cmd_init,
     cmd_item_add, cmd_item_add_batch, cmd_item_get, cmd_item_update,
+    cmd_item_relation_add, cmd_item_relation_set, cmd_item_relation_delete,
+    cmd_item_relations,
     cmd_item_delete, cmd_item_list, cmd_item_search,
 )
 from types_mod import (
@@ -54,6 +62,7 @@ def main():
         print("Commands: init,")
         print("         add, ask,")
         print("         item_add, item_add_batch, item_get, item_update, item_delete,")
+        print("         item_relation_add, item_relation_set, item_relation_delete, item_relations,")
         print("         item_list, item_search,")
         print("         type_set, type_get, type_list, type_tree, type_delete")
         sys.exit(1)
@@ -72,6 +81,22 @@ def main():
             cmd_item_get(sys.argv[2])
         elif command == "item_update":
             cmd_item_update(sys.argv[2], sys.argv[3])
+        elif command == "item_relation_add":
+            cmd_item_relation_add(
+                sys.argv[2],
+                sys.argv[3],
+                sys.argv[4] if len(sys.argv) > 4 else None,
+            )
+        elif command == "item_relation_set":
+            cmd_item_relation_set(sys.argv[2], sys.argv[3])
+        elif command == "item_relation_delete":
+            cmd_item_relation_delete(
+                sys.argv[2],
+                sys.argv[3] if len(sys.argv) > 3 else None,
+                sys.argv[4] if len(sys.argv) > 4 else None,
+            )
+        elif command == "item_relations":
+            cmd_item_relations(sys.argv[2])
         elif command == "item_delete":
             cmd_item_delete(sys.argv[2])
         elif command == "item_list":

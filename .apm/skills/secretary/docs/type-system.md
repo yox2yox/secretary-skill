@@ -9,7 +9,7 @@
 
 - **タイプ**: データのスキーマ（フィールド定義）を持つ型定義。継承とアブストラクトをサポート
 - **アイテム**: 個々のデータレコード。タイプを1つだけ持つ（または未設定）
-- **リレーション**: アイテムの `data` JSONフィールド内にIDで他のアイテムを参照
+- **リレーション**: `item_relations` テーブルでアイテム同士を直接関連付ける
 
 ## 基本ルール
 
@@ -26,6 +26,7 @@
 - `type_get` で取得すると、`resolved_fields`（継承を解決した全フィールド）が返される
 
 **例: 継承を使ったタイプ定義**
+
 ```bash
 # 抽象親タイプを定義（共通フィールドを持つ）
 python3 SCRIPT type_set '{
@@ -103,8 +104,20 @@ python3 SCRIPT item_list '{"type": "meeting"}'
 
 ## リレーション（データ間の関係）
 
-アイテム間の関係は `item_relations` テーブルに保存されます。`fields_schema` で
-`"type": "ref"` として定義されたフィールドが対象です。
+アイテム間の関係は `item_relations` テーブルに保存されます。`fields_schema` の
+`"type": "ref"` フィールドを使った互換動作も残っていますが、直接関連を作る場合は
+`item_relation_add` / `item_relation_set` を使います。
+
+```bash
+python3 SCRIPT item_relation_add 1 7 assignee
+python3 SCRIPT item_relation_add 1 10 related_goal
+python3 SCRIPT item_relation_set 1 '[7, 10]'
+python3 SCRIPT item_relations 1
+```
+
+関係名を省略すると `"related"` として保存されます。
+
+### refフィールド互換
 
 **保存時:** `data` にrefフィールドのIDを含めると、自動的に `item_relations` テーブルに
 保存され、`data` JSON からは除外されます。
@@ -149,33 +162,7 @@ python3 SCRIPT item_add '{"type": "task", "title": "議事録を共有する", "
 ```
 
 ルートアイテムのみ表示：
+
 ```bash
 python3 SCRIPT item_list '{"parent_id": null}'
 ```
-
-## デフォルトタイプ
-
-`init` コマンドで自動作成されるタイプ一覧：
-
-| タイプ | 表示名 | 説明 |
-|--------|--------|------|
-| `person`     | 人物         | ユーザー（オーナー）と周囲の人々のプロフィール |
-| `event`      | イベント     | 起こった出来事や進行中の出来事 |
-| `plan`       | 計画         | 将来の予定された活動 |
-| `goal`       | 目標         | 目標と抱負 |
-| `task`       | タスク       | 実行すべきアクション項目 |
-| `decision`   | 決定事項     | 決定済みまたは保留中の決定事項 |
-| `project`    | プロジェクト | 担当するアプリ開発プロジェクト |
-| `meeting`    | ミーティング | 会議の議事録・メモ |
-| `bug`        | バグ         | 発見されたバグ・不具合の記録 |
-| `idea`       | アイデア     | 機能アイデアや改善提案 |
-| `release`    | リリース     | アプリのリリース記録 |
-| `incident`   | インシデント | 本番障害・サービス影響の記録 |
-| `review`     | コードレビュー | PR/MRレビューの記録と追跡 |
-| `sprint`     | スプリント   | スプリント期間の計画と実績の管理 |
-| `deployment` | デプロイ     | デプロイ実施の記録と追跡 |
-| `spec`       | 仕様         | 機能仕様・要件定義・設計ドキュメント |
-| `tech_debt`  | 技術的負債   | リファクタリングや改善すべき技術的課題の管理 |
-
-各タイプは `fields_schema` を持ち、アイテムの `data` フィールドの構造を定義します。
-デフォルトのタイプはコード内（`db.py` の `DEFAULT_TYPES`）に定義されています。

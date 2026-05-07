@@ -9,6 +9,7 @@ from db import get_connection, ensure_schema, seed_defaults, get_type_descendant
 
 # Allowed sort columns for item queries
 _SORT_COLUMNS = {"created_at", "updated_at", "title", "status", "type"}
+_DEFAULT_RELATION_NAME = "related"
 
 
 def _build_date_clauses(filters, where_clauses, params):
@@ -110,8 +111,15 @@ def _enrich_items(conn, items):
     # Merge relations into item data
     for item in items:
         item_rels = rel_map.get(item["id"], {})
+        item["relations"] = [
+            {"related_item_id": related_id, "relation": field_name}
+            for field_name, ids in item_rels.items()
+            for related_id in ids
+        ]
         ref_fields = type_ref_cache.get(item.get("type"), {})
         for fname, ids in item_rels.items():
+            if fname not in ref_fields:
+                continue
             finfo = ref_fields.get(fname, {})
             if finfo.get("multiple", False):
                 item["data"][fname] = ids
@@ -181,6 +189,51 @@ def _save_relations(conn, item_id, relations, type_name):
             "INSERT OR IGNORE INTO item_relations (item_id, related_item_id, field_name) VALUES (?, ?, ?)",
             (item_id, related_id, field_name),
         )
+
+
+def _normalize_direct_relations_payload(payload):
+    """Normalize direct relation input into ``[(related_item_id, relation), ...]``."""
+    if isinstance(payload, dict) and "relations" in payload:
+        payload = payload["relations"]
+
+    relations = []
+
+    if isinstance(payload, int):
+        return [(payload, _DEFAULT_RELATION_NAME)]
+
+    if isinstance(payload, dict):
+        relation_name = payload.get("relation", payload.get("field_name", _DEFAULT_RELATION_NAME))
+        if "related_item_ids" in payload:
+            values = payload["related_item_ids"]
+        elif "related_item_id" in payload:
+            values = [payload["related_item_id"]]
+        else:
+            raise ValueError("Relations JSON is missing related_item_id or related_item_ids")
+        for related_id in values:
+            if related_id is not None:
+                relations.append((int(related_id), str(relation_name)))
+        return relations
+
+    if isinstance(payload, list):
+        for entry in payload:
+            if isinstance(entry, int):
+                relations.append((entry, _DEFAULT_RELATION_NAME))
+                continue
+            if not isinstance(entry, dict):
+                raise ValueError("Relation list entries must be item IDs or objects")
+            relation_name = entry.get("relation", entry.get("field_name", _DEFAULT_RELATION_NAME))
+            related_id = entry.get("related_item_id")
+            if related_id is not None:
+                relations.append((int(related_id), str(relation_name)))
+        return relations
+
+    raise ValueError("Relations JSON must be an object or an array")
+
+
+def _ensure_item_exists(conn, item_id, label="Item"):
+    row = conn.execute("SELECT 1 FROM items WHERE id = ?", (int(item_id),)).fetchone()
+    if not row:
+        raise ValueError(f"{label} not found: {item_id}")
 
 
 def _insert_item(conn, data):
@@ -385,6 +438,137 @@ def cmd_item_update(item_id, update_json):
     conn.commit()
     conn.close()
     print(json.dumps({"status": "ok", "id": iid}))
+
+
+def cmd_item_relation_add(item_id, related_item_id, relation_name=None):
+    """Add one direct item relation without requiring a ref field."""
+    conn = get_connection()
+    ensure_schema(conn)
+
+    iid = int(item_id)
+    rid = int(related_item_id)
+    relation = relation_name or _DEFAULT_RELATION_NAME
+    try:
+        _ensure_item_exists(conn, iid)
+        _ensure_item_exists(conn, rid, "Related item")
+    except ValueError as e:
+        conn.close()
+        print(json.dumps({"status": "error", "message": str(e)}))
+        return
+
+    conn.execute(
+        "INSERT OR IGNORE INTO item_relations (item_id, related_item_id, field_name) VALUES (?, ?, ?)",
+        (iid, rid, relation),
+    )
+    conn.execute(
+        "UPDATE items SET updated_at = datetime('now', 'localtime') WHERE id = ?",
+        (iid,),
+    )
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "item_id": iid, "related_item_id": rid, "relation": relation}))
+
+
+def cmd_item_relation_set(item_id, relations_json):
+    """Replace all direct relation rows for an item."""
+    payload = json.loads(relations_json)
+    conn = get_connection()
+    ensure_schema(conn)
+
+    iid = int(item_id)
+    try:
+        _ensure_item_exists(conn, iid)
+        relations = _normalize_direct_relations_payload(payload)
+        for related_id, _ in relations:
+            _ensure_item_exists(conn, related_id, "Related item")
+    except ValueError as e:
+        conn.close()
+        print(json.dumps({"status": "error", "message": str(e)}))
+        return
+
+    conn.execute("DELETE FROM item_relations WHERE item_id = ?", (iid,))
+    for related_id, relation in relations:
+        conn.execute(
+            "INSERT OR IGNORE INTO item_relations (item_id, related_item_id, field_name) VALUES (?, ?, ?)",
+            (iid, related_id, relation),
+        )
+
+    conn.execute(
+        "UPDATE items SET updated_at = datetime('now', 'localtime') WHERE id = ?",
+        (iid,),
+    )
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "item_id": iid, "count": len(relations)}))
+
+
+def cmd_item_relation_delete(item_id, related_item_id=None, relation_name=None):
+    """Delete direct relation rows for an item."""
+    conn = get_connection()
+    ensure_schema(conn)
+
+    iid = int(item_id)
+    try:
+        _ensure_item_exists(conn, iid)
+    except ValueError as e:
+        conn.close()
+        print(json.dumps({"status": "error", "message": str(e)}))
+        return
+
+    params = [iid]
+    clauses = ["item_id = ?"]
+    if related_item_id is not None:
+        clauses.append("related_item_id = ?")
+        params.append(int(related_item_id))
+    if relation_name is not None:
+        clauses.append("field_name = ?")
+        params.append(relation_name)
+
+    cursor = conn.execute(
+        f"DELETE FROM item_relations WHERE {' AND '.join(clauses)}",
+        params,
+    )
+    conn.execute(
+        "UPDATE items SET updated_at = datetime('now', 'localtime') WHERE id = ?",
+        (iid,),
+    )
+    conn.commit()
+    conn.close()
+    print(json.dumps({"status": "ok", "item_id": iid, "deleted": cursor.rowcount}))
+
+
+def cmd_item_relations(item_id):
+    """List direct relation rows for an item, including incoming links."""
+    conn = get_connection()
+    ensure_schema(conn)
+
+    iid = int(item_id)
+    outgoing = conn.execute(
+        """SELECT ir.item_id, ir.related_item_id, ir.field_name AS relation,
+                  rel.type AS related_type, rel.title AS related_title
+           FROM item_relations ir
+           JOIN items rel ON rel.id = ir.related_item_id
+           WHERE ir.item_id = ?
+           ORDER BY ir.field_name, rel.title""",
+        (iid,),
+    ).fetchall()
+    incoming = conn.execute(
+        """SELECT ir.item_id, src.type AS source_type, src.title AS source_title,
+                  ir.related_item_id, ir.field_name AS relation
+           FROM item_relations ir
+           JOIN items src ON src.id = ir.item_id
+           WHERE ir.related_item_id = ?
+           ORDER BY ir.field_name, src.title""",
+        (iid,),
+    ).fetchall()
+
+    result = {
+        "item_id": iid,
+        "outgoing": [dict(row) for row in outgoing],
+        "incoming": [dict(row) for row in incoming],
+    }
+    conn.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_item_delete(item_id):

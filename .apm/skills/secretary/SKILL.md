@@ -31,6 +31,7 @@ allowed-tools: Bash
 秘書DBスクリプト: !`find ~/.claude/skills .claude/skills .github/skills .cursor/skills .opencode/skills .gemini/skills -path '*/secretary/scripts/secretary.py' 2>/dev/null | head -1`
 
 上記のスクリプトパスが空の場合、以下の一般的な場所を確認してください：
+
 - `.claude/skills/secretary/scripts/secretary.py`
 - `~/.claude/skills/secretary/scripts/secretary.py`
 - `.github/skills/secretary/scripts/secretary.py`
@@ -44,6 +45,7 @@ allowed-tools: Bash
 ## データベースの初期化
 
 初回使用前にデータベースを初期化してください：
+
 ```bash
 python3 SCRIPT init
 ```
@@ -53,10 +55,10 @@ python3 SCRIPT init
 このスキルは、ユーザーや上位エージェントが以下の固定モードを渡して呼び出す前提で
 動作します。スクリプトの呼び出し入口は `add` と `ask` の2つだけです。
 
-| モード | 用途 | 実行コマンド |
-|---|---|---|
-| `add` | 情報の追加。1件か複数件かは内容を見て判断する | `python3 SCRIPT add '<json>'` |
-| `ask` | 保存済み情報への質問・検索 | `python3 SCRIPT ask '<keyword>' [type_or_json_filter]` |
+| モード | 用途                                          | 実行コマンド                                           |
+| ------ | --------------------------------------------- | ------------------------------------------------------ |
+| `add`  | 情報の追加。1件か複数件かは内容を見て判断する | `python3 SCRIPT add '<json>'`                          |
+| `ask`  | 保存済み情報への質問・検索                    | `python3 SCRIPT ask '<keyword>' [type_or_json_filter]` |
 
 内部処理では `type_tree`、`item_add`、`item_search`、`item_list`、`item_get` などの
 既存コマンドを必要に応じて使ってください。`add_batch` という呼び出しモードは使わず、
@@ -87,28 +89,20 @@ python3 SCRIPT type_tree
 **ステップ2: 情報を分割し、適切なタイプを選択する**
 
 - 1つの報告に複数の種類の情報が含まれる場合、別々のアイテムとして保存する
-- 子タイプが存在する場合は、より具体的な子タイプを優先して使用する
-  （例: `event` より `meeting` が適切なら `meeting` を使う）
 - 抽象タイプは直接使用できないため、必ず具象の子タイプを選ぶ
 
-**ステップ3: 保存前にrefフィールドを解決する**
+**ステップ3: 保存前に親子関係と関連付けを解決する**
 
-保存するタイプを決めたら、`type_get <type_name>` などで継承込みの `fields_schema` を確認し、
-`type: "ref"` かつ `ref_type` が定義された既存フィールドだけを候補にします。
-汎用的な関連フィールドを新しく作るのではなく、`related_persons`、`assignee`、`attendees`、
-`related_goal`、`related_project` など、そのタイプに既にあるrefフィールドへIDを入れてください。
+保存するタイプを決めたら、関連しそうなitemを検索して探し出し、item_relationsを設定する。
+また、同じタイプで親子関係を付けたほうがいいアイテムが見つかればparent_idも設定する。
 
-保存前に、入力中の人物・プロジェクト・目標・会議・タスク・リリースなどの関連候補を抽出し、
-該当する `ref_type` の既存アイテムを `ask` / `item_list` / `item_get` で検索します。
+関連付けは `ref` フィールドに依存せず、直接 `item_relations` に登録する。
 
-- 人物候補は、敬称の除去、姓のみ・名のみ、ひらがな/カタカナ/漢字、全角/半角、
-  妥当と思われるローマ字表記などの名前バリエーションも考慮して検索する
-- 人物以外は、文中の関連語を取り出し、`project`、`goal`、`meeting`、`task`、`release`
-  など関連しそうな既存タイプを検索する
-- 1件だけ確信度の高い一致がある場合は、そのIDを適切なrefフィールドに追加する
-- 複数候補や曖昧な一致がある場合は、保存前にユーザーへ確認し、確認なしにIDを入れない
-- 確信度が低い、またはよい一致がない場合はrefを省略し、保存後のサマリーで
-  未解決の関連候補として報告する
+```bash
+python3 SCRIPT item_relation_add <item_id> <related_item_id> [relation]
+python3 SCRIPT item_relation_set <item_id> '[{"related_item_id": 3, "relation": "related"}]'
+python3 SCRIPT item_relations <item_id>
+```
 
 **ステップ4: アイテムを保存する**
 
@@ -119,13 +113,6 @@ python3 SCRIPT type_tree
 python3 SCRIPT add '{"type": "event", "title": "チーム定例", "data": {"event_date": "2025-01-15", "start_time": "14:00", "related_persons": [3]}}'
 python3 SCRIPT item_add '{"type": "task", "title": "設計書作成", "data": {"due_date": "2025-01-22"}}'
 ```
-
-- 人物に関する情報は `person` タイプで保存する
-- アイテム間の関係は `data` 内にrefフィールドのIDを指定する（例: `"related_persons": [3, 5]`）。
-  refフィールドは自動的に `item_relations` テーブルに保存される
-
-保存後、何が保存されたか、解決して追加した関連ID、未解決の関連候補を簡潔なサマリーで
-ユーザーに確認します。
 
 ## `ask` で質問された場合
 
@@ -177,6 +164,8 @@ python3 SCRIPT item_get <item_id>
 ```bash
 python3 SCRIPT item_update <item_id> '{"status": "completed"}'
 python3 SCRIPT item_update <item_id> '{"data": {"priority": "high"}}'
+python3 SCRIPT item_relation_add <item_id> <related_item_id> [relation]
+python3 SCRIPT item_relation_delete <item_id> [related_item_id] [relation]
 ```
 
 `data` フィールドは既存データとマージされます。
@@ -186,45 +175,6 @@ python3 SCRIPT item_update <item_id> '{"data": {"priority": "high"}}'
 ```bash
 python3 SCRIPT item_delete <item_id>
 ```
-
-## 新しいタイプの追加が必要な場合
-
-新しいデータを保存する際、すぐに新しいタイプを作成するのではなく、以下の順序で検討してください。
-
-### ステップ1: 既存のタイプで賄えないか確認する
-
-`type_list` や `type_tree` で既存のタイプを確認し、保存したいデータが
-既存のタイプに当てはまらないかを検討します。
-
-**既存タイプで対応できる場合は、新しいタイプを作らずに既存のタイプを活用してください。**
-
-### ステップ2: 既存のタイプの子タイプとして追加できないか検討する
-
-既存のタイプと共通するフィールドが多い場合、そのタイプの子タイプとして定義します。
-
-子タイプとして適切なケース：
-- 親タイプのフィールドをすべて（または大部分）使用する
-- 親タイプの概念を特殊化・具体化している
-- ポリモーフィック検索で親タイプと一緒に検索したい場合
-
-### ステップ3: 既存のタイプを拡張できないか検討する
-
-既存のタイプでほぼ対応できるが特定のフィールドが足りない場合は、
-`type_set` で `fields_schema` にフィールドを追加します。
-
-拡張が不適切なケース：
-- 追加するフィールドが既存タイプの本来の目的から逸脱する場合
-
-### ステップ4: 新しいタイプとして追加する
-
-既存のタイプでは対応できず、拡張も子タイプ化も不自然な場合にのみ、
-新しいルートタイプを作成します。
-
-新しいタイプ作成時の注意：
-- 既存のデフォルトタイプと意味が重複しないか再確認する
-- `ref` フィールドで既存タイプとの関連を設計する
-- タイプ名は英語の単数形にする（例: `book`, `project`, `recipe`）
-- 今後の拡張が見込まれる場合はアブストラクトな親タイプの作成も検討する
 
 ## レスポンスガイドライン
 
@@ -254,27 +204,3 @@ python3 SCRIPT item_delete <item_id>
 - 時刻は常に `HH:MM` 形式（24時間制）を使用
 - ユーザーが「今日」「明日」「来週の月曜」などと言った場合、現在の日付に基づいて
   実際の日付を計算する
-
-## ユースケース例
-
-### 日常のイベント報告
-ユーザー: 「今日は14時から佐藤さんとチームミーティングがあって、来月のリリース計画について話し合った。」
-
-アクション:
-1. `type_tree` でタイプ階層を確認し、適切なタイプを判断する
-2. 報告を分割：イベント情報（ミーティング）と人物参照（佐藤さん）
-3. personタイプで佐藤さんのIDを検索: `ask '佐藤' person`
-4. 最適なタイプでイベントを保存（例: `meeting` 子タイプがあればそれを、なければ `event` を使用）
-
-### 人物に関連するアイテムの検索
-ユーザー: 「佐藤さんとの最近の打ち合わせ内容は？」
-
-アクション:
-1. `type_tree` でタイプ階層を確認し、打ち合わせに該当するタイプを特定する
-2. 佐藤さんのアイテムIDを検索: `ask '佐藤' person`
-3. 打ち合わせ関連のタイプで検索: `ask '佐藤' event`（子タイプも含まれる）
-
-### 新しいドメインデータ
-ユーザーが既存のタイプに収まらない構造化データについて言及した場合、
-「新しいタイプの追加が必要な場合」の検討プロセスに従い、
-必要であれば新しいタイプの作成を積極的に提案してください。

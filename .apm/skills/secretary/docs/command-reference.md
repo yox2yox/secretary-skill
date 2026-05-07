@@ -24,6 +24,7 @@ python3 SCRIPT init
 ```
 
 - データベースは `~/.secretary/data.db` に保存される
+- テストや一時実行では `SECRETARY_DB_PATH` 環境変数でDBファイルを上書きできる
 - 冪等（複数回実行しても安全）
 - デフォルトタイプが存在しない場合のみ作成される
 
@@ -154,6 +155,37 @@ python3 SCRIPT item_update <item_id> '<json>'
 python3 SCRIPT item_update 1 '{"status": "completed"}'
 python3 SCRIPT item_update 1 '{"data": {"priority": "high", "due_date": "2025-02-01"}}'
 python3 SCRIPT item_update 1 '{"type": "task"}'
+```
+
+## item_relation_add / item_relation_set / item_relation_delete / item_relations
+
+`item_relations` テーブルを直接操作します。タイプの `ref` フィールド定義は不要です。
+内部的には既存カラム `field_name` に関係名を保存します。関係名を省略すると
+`"related"` が使われます。
+
+```bash
+# 1件追加
+python3 SCRIPT item_relation_add <item_id> <related_item_id> [relation]
+
+# そのアイテムから出る関連をまとめて置き換え
+python3 SCRIPT item_relation_set <item_id> '<json>'
+
+# 関連を削除。related_item_id と relation は省略可能
+python3 SCRIPT item_relation_delete <item_id> [related_item_id] [relation]
+
+# outgoing / incoming の関連を確認
+python3 SCRIPT item_relations <item_id>
+```
+
+**`item_relation_set` のJSON例:**
+
+```bash
+python3 SCRIPT item_relation_set 1 '[2, 3]'
+python3 SCRIPT item_relation_set 1 '{"related_item_ids": [2, 3], "relation": "mentions"}'
+python3 SCRIPT item_relation_set 1 '[
+  {"related_item_id": 2, "relation": "mentions"},
+  {"related_item_id": 3, "relation": "blocks"}
+]'
 ```
 
 ## item_delete
