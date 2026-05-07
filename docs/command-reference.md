@@ -4,6 +4,17 @@
 
 すべてのコマンドはJSON形式で結果を返します。
 
+## 推奨モード
+
+スキル呼び出し時は、短い固定モードを渡す前提です。外部からの呼び出し入口は
+`add` と `ask` の2つだけです。旧 `item_*` / `type_*` コマンドは内部処理や
+後方互換のために残っています。
+
+| モード | 旧コマンド | 用途 |
+|---|---|---|
+| `add` | `item_add` | 情報の追加。1件か複数件かは内容を見て判断する |
+| `ask` | `item_search` | キーワード検索・質問 |
+
 ## init
 
 データベースを初期化し、デフォルトタイプを作成します。
@@ -16,12 +27,12 @@ python3 SCRIPT init
 - 冪等（複数回実行しても安全）
 - デフォルトタイプが存在しない場合のみ作成される
 
-## item_add
+## add / item_add
 
 アイテムを1件追加します。
 
 ```bash
-python3 SCRIPT item_add '<json>'
+python3 SCRIPT add '<json>'
 ```
 
 **必須フィールド:** `title`
@@ -39,7 +50,7 @@ python3 SCRIPT item_add '<json>'
 
 **例:**
 ```bash
-python3 SCRIPT item_add '{
+python3 SCRIPT add '{
   "type": "event",
   "title": "チーム定例ミーティング",
   "content": "Q1ロードマップについて議論した。",
@@ -64,7 +75,8 @@ python3 SCRIPT item_add '{
 
 ## item_add_batch
 
-複数のアイテムを一括で追加します。
+複数のアイテムを一括で追加する旧互換コマンドです。通常のスキル呼び出しでは使いません。
+`add` で受け取った情報を個別に判断し、必要なアイテムを1件ずつ保存してください。
 
 ```bash
 python3 SCRIPT item_add_batch '<json_array>'
@@ -207,7 +219,7 @@ python3 SCRIPT item_list '{"type": "task", "limit": 10, "offset": 10}'
 **ポリモーフィックフィルタリング:**
 `{"type": "event"}` を指定すると、`event` タイプだけでなく `event` を継承するすべての子孫タイプのアイテムも返されます。詳細は [タイプシステム](type-system.md) を参照。
 
-## item_search
+## ask / item_search
 
 キーワードでアイテムを全文検索します。FTS5（trigram）を使用し、利用できない場合はLIKE検索にフォールバックします。
 
@@ -216,7 +228,7 @@ python3 SCRIPT item_list '{"type": "task", "limit": 10, "offset": 10}'
 田中さんの人物アイテムに関連付けされたタスクやイベントも結果に含まれます。
 
 ```bash
-python3 SCRIPT item_search '<keyword>' [type_or_json_filter]
+python3 SCRIPT ask '<keyword>' [type_or_json_filter]
 ```
 
 **引数:**
@@ -243,16 +255,16 @@ python3 SCRIPT item_search '<keyword>' [type_or_json_filter]
 **例:**
 ```bash
 # 基本的な使い方（後方互換）
-python3 SCRIPT item_search 'ミーティング'
-python3 SCRIPT item_search '佐藤' person
-python3 SCRIPT item_search '会議' event
-python3 SCRIPT item_search '田中' task    # 田中さんに関連付けされたタスクも返される
+python3 SCRIPT ask 'ミーティング'
+python3 SCRIPT ask '佐藤' person
+python3 SCRIPT ask '会議' event
+python3 SCRIPT ask '田中' task    # 田中さんに関連付けされたタスクも返される
 
 # JSONフィルタで高度な絞り込み
-python3 SCRIPT item_search 'ミーティング' '{"type": "event", "status": "active"}'
-python3 SCRIPT item_search '設計' '{"type": "task", "data_filters": {"priority": "high"}}'
-python3 SCRIPT item_search '会議' '{"created_at_after": "2025-01-01", "sort": "created_at", "sort_order": "asc"}'
-python3 SCRIPT item_search '報告' '{"type": "task", "data_filters": {"due_date": {"before": "2025-02-01"}}, "limit": 20}'
+python3 SCRIPT ask 'ミーティング' '{"type": "event", "status": "active"}'
+python3 SCRIPT ask '設計' '{"type": "task", "data_filters": {"priority": "high"}}'
+python3 SCRIPT ask '会議' '{"created_at_after": "2025-01-01", "sort": "created_at", "sort_order": "asc"}'
+python3 SCRIPT ask '報告' '{"type": "task", "data_filters": {"due_date": {"before": "2025-02-01"}}, "limit": 20}'
 ```
 
 デフォルトで最大50件を返します（`limit` で変更可能）。
