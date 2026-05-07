@@ -11,6 +11,8 @@ Commands:
     init                              Initialize the database
     add '<json>'                      Add an item
     ask '<keyword>' [type|filter]     Search items for an answer
+    collect plan [service|all]        Plan agent-mediated MCP collection
+    collect save '<json>'             Save normalized collected MCP events
     item_add '<json>'                 Add an item
     item_add_batch '<json>'           Add multiple items
     item_get <id>                     Get item details
@@ -40,6 +42,7 @@ from items_mod import (
 from types_mod import (
     cmd_type_set, cmd_type_get, cmd_type_list, cmd_type_tree, cmd_type_delete,
 )
+from collect_mod import cmd_collect
 
 
 COMMAND_ALIASES = {
@@ -52,7 +55,7 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: secretary.py <command> [args...]")
         print("Commands: init,")
-        print("         add, ask,")
+        print("         add, ask, collect,")
         print("         item_add, item_add_batch, item_get, item_update, item_delete,")
         print("         item_list, item_search,")
         print("         type_set, type_get, type_list, type_tree, type_delete")
@@ -63,6 +66,8 @@ def main():
     try:
         if command == "init":
             cmd_init()
+        elif command == "collect":
+            cmd_collect(sys.argv[2:])
         # Item commands
         elif command == "item_add":
             cmd_item_add(sys.argv[2])
