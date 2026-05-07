@@ -8,11 +8,11 @@ description: >
   タイプの継承により、親タイプで検索すると子タイプのアイテムも含めた
   ポリモーフィックな検索が可能です。データ間の関係はitem_relationsテーブルに
   IDで保存され、検索時には関連アイテムの内容も含めた全文検索が可能です。
-  ユーザーが日常の活動報告、イベント記録、
+  決められた呼び出し引数で使うことを前提にします。情報の追加はadd、
+  質問や検索はaskを使います。日常の活動報告、イベント記録、
   目標設定、将来のタスク計画、保存された情報への質問、個人・連絡先
-  プロフィールの管理、構造化ドメインデータの保存・検索を行う際にこのスキルを
-  使用してください。ユーザーがサマリー、スケジュール、目標や計画のステータスを
-  求めた場合にもトリガーされます。
+  プロフィール管理、構造化ドメインデータの保存・検索、サマリーや
+  スケジュール確認に使用してください。
 allowed-tools: Bash
 ---
 
@@ -43,7 +43,21 @@ allowed-tools: Bash
 python3 SCRIPT init
 ```
 
-## ユーザーが情報を報告した場合
+## 呼び出し引数の前提
+
+このスキルは、ユーザーや上位エージェントが以下の固定モードを渡して呼び出す前提で
+動作します。外部からの呼び出し入口は `add` と `ask` の2つだけです。
+
+| モード | 用途 | 実行コマンド |
+|---|---|---|
+| `add` | 情報の追加。1件か複数件かは内容を見て判断する | `python3 SCRIPT add '<json>'` |
+| `ask` | 保存済み情報への質問・検索 | `python3 SCRIPT ask '<keyword>' [type_or_json_filter]` |
+
+内部処理では `type_tree`、`item_add`、`item_search`、`item_list`、`item_get` などの
+既存コマンドを必要に応じて使ってください。`add_batch` という呼び出しモードは使わず、
+複数件登録すべき場合は `add` の処理中に個別のアイテムへ分割して判断します。
+
+## `add` で情報を追加する場合
 
 ユーザーの非構造化入力を解析し、適切なタイプでアイテムとして保存します。
 
@@ -64,11 +78,12 @@ python3 SCRIPT type_tree
 
 **ステップ3: アイテムを保存する**
 
-`item_add` で1件ずつ、または `item_add_batch` で一括保存します。
+`add` で渡された情報を確認し、1件だけ保存すべきか、複数の独立したアイテムとして
+保存すべきかを判断します。複数件に分割する場合は `item_add` を必要な回数だけ実行します。
 
 ```bash
-python3 SCRIPT item_add '{"type": "event", "title": "チーム定例", "data": {"event_date": "2025-01-15", "start_time": "14:00", "related_persons": [3]}}'
-python3 SCRIPT item_add_batch '[{"type": "task", "title": "設計書作成", "data": {"due_date": "2025-01-22"}}, ...]'
+python3 SCRIPT add '{"type": "event", "title": "チーム定例", "data": {"event_date": "2025-01-15", "start_time": "14:00", "related_persons": [3]}}'
+python3 SCRIPT item_add '{"type": "task", "title": "設計書作成", "data": {"due_date": "2025-01-22"}}'
 ```
 
 - 人物に関する情報は `person` タイプで保存する
@@ -77,7 +92,7 @@ python3 SCRIPT item_add_batch '[{"type": "task", "title": "設計書作成", "da
 
 保存後、何が保存されたかを簡潔なサマリーでユーザーに確認します。
 
-## ユーザーが質問をした場合
+## `ask` で質問された場合
 
 **ステップ1: タイプ階層を確認して検索戦略を決める**
 
@@ -93,13 +108,13 @@ python3 SCRIPT type_tree
 
 ```bash
 # キーワード検索（全体）
-python3 SCRIPT item_search 'キーワード'
+python3 SCRIPT ask 'キーワード'
 
 # タイプで絞り込み検索（子孫タイプも含む）
-python3 SCRIPT item_search 'キーワード' event
+python3 SCRIPT ask 'キーワード' event
 
 # 高度な絞り込み検索（JSONフィルタ）
-python3 SCRIPT item_search 'キーワード' '{"type": "task", "status": "active", "data_filters": {"priority": "high"}}'
+python3 SCRIPT ask 'キーワード' '{"type": "task", "status": "active", "data_filters": {"priority": "high"}}'
 
 # フィルタ付き一覧
 python3 SCRIPT item_list '{"type": "task", "status": "active"}'
@@ -116,13 +131,13 @@ python3 SCRIPT item_list '{"created_at_after": "2025-01-01", "created_at_before"
 python3 SCRIPT item_get <item_id>
 ```
 
-- `item_search` は関連アイテムを横断して検索する（例: 「田中」で検索すると、
+- `ask` は関連アイテムを横断して検索する（例: 「田中」で検索すると、
   田中さんの人物アイテムに関連付けされたタスクやイベントも返される）
 - `data` 内に参照IDがある場合、`item_get` で参照先の詳細を取得する
 - 結果を分析・統合して有用なレスポンスにまとめる
 - 生のJSONをそのまま表示せず、整理された読みやすい回答を提供する
 
-## ユーザーがアイテムを更新したい場合
+## アイテムを更新する場合
 
 ```bash
 python3 SCRIPT item_update <item_id> '{"status": "completed"}'
@@ -131,7 +146,7 @@ python3 SCRIPT item_update <item_id> '{"data": {"priority": "high"}}'
 
 `data` フィールドは既存データとマージされます。
 
-## ユーザーがアイテムを削除したい場合
+## アイテムを削除する場合
 
 ```bash
 python3 SCRIPT item_delete <item_id>
@@ -213,7 +228,7 @@ python3 SCRIPT item_delete <item_id>
 アクション:
 1. `type_tree` でタイプ階層を確認し、適切なタイプを判断する
 2. 報告を分割：イベント情報（ミーティング）と人物参照（佐藤さん）
-3. personタイプで佐藤さんのIDを検索: `item_search '佐藤' person`
+3. personタイプで佐藤さんのIDを検索: `ask '佐藤' person`
 4. 最適なタイプでイベントを保存（例: `meeting` 子タイプがあればそれを、なければ `event` を使用）
 
 ### 人物に関連するアイテムの検索
@@ -221,8 +236,8 @@ python3 SCRIPT item_delete <item_id>
 
 アクション:
 1. `type_tree` でタイプ階層を確認し、打ち合わせに該当するタイプを特定する
-2. 佐藤さんのアイテムIDを検索: `item_search '佐藤' person`
-3. 打ち合わせ関連のタイプで検索: `item_search '佐藤' event`（子タイプも含まれる）
+2. 佐藤さんのアイテムIDを検索: `ask '佐藤' person`
+3. 打ち合わせ関連のタイプで検索: `ask '佐藤' event`（子タイプも含まれる）
 
 ### 新しいドメインデータ
 ユーザーが既存のタイプに収まらない構造化データについて言及した場合、

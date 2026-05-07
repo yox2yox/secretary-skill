@@ -9,6 +9,8 @@ Usage:
 
 Commands:
     init                              Initialize the database
+    add '<json>'                      Add an item
+    ask '<keyword>' [type|filter]     Search items for an answer
     item_add '<json>'                 Add an item
     item_add_batch '<json>'           Add multiple items
     item_get <id>                     Get item details
@@ -40,16 +42,23 @@ from types_mod import (
 )
 
 
+COMMAND_ALIASES = {
+    "add": "item_add",
+    "ask": "item_search",
+}
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: secretary.py <command> [args...]")
         print("Commands: init,")
+        print("         add, ask,")
         print("         item_add, item_add_batch, item_get, item_update, item_delete,")
         print("         item_list, item_search,")
         print("         type_set, type_get, type_list, type_tree, type_delete")
         sys.exit(1)
 
-    command = sys.argv[1]
+    command = COMMAND_ALIASES.get(sys.argv[1], sys.argv[1])
 
     try:
         if command == "init":
